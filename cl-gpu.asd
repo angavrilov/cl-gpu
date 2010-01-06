@@ -1,0 +1,19 @@
+;;; -*- mode: Lisp; Syntax: Common-Lisp; -*-
+;;;
+;;; Copyright (c) 2010 by the authors.
+;;;
+;;; See LICENCE for details.
+
+(load-system :hu.dwim.asdf)
+
+(in-package :hu.dwim.asdf)
+
+(defsystem :cl-gpu
+  :class hu.dwim.system
+  :author ("Alexander Gavrilov <angavrilov@gmail.com>")
+  :licence "LLGPL"
+  :description "A library for writing GPU kernels in a subset of CL"
+  :depends-on (:hu.dwim.walker)
+  :components ((:module "core"
+                :components ((:file "package")
+                             (:file "utils" :depends-on ("package"))))))
