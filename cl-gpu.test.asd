@@ -18,4 +18,5 @@
                :cl-gpu)
   :components ((:module "test"
                 :components ((:file "utils" :depends-on ("package"))
+                             (:file "cuda-driver" :depends-on ("package"))
                              (:file "package")))))

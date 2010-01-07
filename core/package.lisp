@@ -12,9 +12,12 @@
   (:use :alexandria
         :anaphora
         :contextl
+        :cffi
         :hu.dwim.common-lisp
         :hu.dwim.def
         :hu.dwim.defclass-star
         :hu.dwim.util
         :metabang-bind
-        :hu.dwim.walker))
+        :hu.dwim.walker)
+
+  (:export #:cuda-driver-error))

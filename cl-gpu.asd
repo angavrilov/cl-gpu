@@ -8,12 +8,18 @@
 
 (in-package :hu.dwim.asdf)
 
+(pushnew :cuda *features*)
+
 (defsystem :cl-gpu
   :class hu.dwim.system
   :author ("Alexander Gavrilov <angavrilov@gmail.com>")
   :licence "LLGPL"
   :description "A library for writing GPU kernels in a subset of CL"
-  :depends-on (:hu.dwim.walker)
+  :depends-on (:cffi
+               :hu.dwim.walker)
   :components ((:module "core"
                 :components ((:file "package")
-                             (:file "utils" :depends-on ("package"))))))
+                             (:file "utils" :depends-on ("package"))))
+               (:module "cuda"
+                :depends-on ("core")
+                :components (#+cuda (:file "driver-api")))))
