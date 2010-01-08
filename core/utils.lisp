@@ -28,6 +28,7 @@
       (values ivector base size))))
 
 (def (function e) write-array-bytes (array stream)
+  "Write the contents of the array to a binary stream."
   #+ecl (write-sequence (ext:array-raw-data array) stream)
   #+ccl (multiple-value-bind (ivector base size)
             (array-ivector-range array)
@@ -35,6 +36,7 @@
   #-(or ecl ccl) (error "Not implemented"))
 
 (def (function e) read-array-bytes (array stream)
+  "Restore the contents of the array from a binary stream."
   #+ecl (read-sequence (ext:array-raw-data array) stream)
   #+ccl (multiple-value-bind (ivector base size)
             (array-ivector-range array)
@@ -52,6 +54,7 @@
     (#x44525241 'double-float)))
 
 (def (function e) write-array (array stream)
+  "Store the array to a binary stream with meta-data."
   (let* ((dims (list* (array-type-tag array)
                       (array-rank array)
                       (array-dimensions array)))
@@ -63,6 +66,7 @@
     (write-array-bytes array stream)))
 
 (def (function e) read-array (array stream &key allocate)
+  "Restore data written using write-array."
   (let ((base-hdr (make-array 2 :element-type '(unsigned-byte 32))))
     (declare (dynamic-extent base-hdr))
     (read-array-bytes base-hdr stream)

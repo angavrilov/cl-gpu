@@ -24,7 +24,7 @@
                     ,@(mapcar (lambda (item)
                                 `(,(first item) ,(third item)))
                               errors)
-                    (t (format "UNKNOWN(~A)" code)))))))
+                    (t (format nil "UNKNOWN(~A)" code)))))))
   (mkerr (:SUCCESS                    0        "No errors")
          (:ERROR-INVALID-VALUE        1        "Invalid value")
          (:ERROR-OUT-OF-MEMORY        2        "Out of memory")
@@ -93,6 +93,7 @@
   (cnt-ptr (:pointer :int)))
 
 (def (function e) cuda-device-count ()
+  "Retrieve the number of installed CUDA-capable devices."
   (with-foreign-object (pcount :int)
     (cuda-invoke cuDeviceGetCount pcount)
     (let ((count (mem-ref pcount :int)))
@@ -119,6 +120,7 @@
   (device :int))
 
 (def (function e) cuda-device-attr (device attr)
+  "Retrieve information about a CUDA device."
   ;; The function hangs on negative values.
   (check-type device (unsigned-byte 31))
   (with-foreign-object (tmp :int)
@@ -131,6 +133,7 @@
   (device :int))
 
 (def (function e) cuda-device-version (device)
+  "Retrieve the CUDA device version."
   (check-type device (unsigned-byte 31))
   (with-foreign-objects ((pmajor :int)
                          (pminor :int))
@@ -142,6 +145,7 @@
   (device :int))
 
 (def (function e) cuda-device-total-mem (device)
+  "Retrieve the total amount of RAM in a CUDA device."
   (check-type device (unsigned-byte 31))
   (with-foreign-object (tmp :unsigned-int)
     (cuda-invoke cuDeviceTotalMem tmp device)
@@ -153,6 +157,7 @@
   (device :int))
 
 (def (function e) cuda-device-name (device)
+  "Retrieve the name of a CUDA device."
   (check-type device (unsigned-byte 31))
   (with-foreign-pointer-as-string (name 256 :encoding :ascii)
     (cuda-invoke cuDeviceGetName name 256 device)))
