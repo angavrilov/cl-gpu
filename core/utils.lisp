@@ -91,3 +91,96 @@
                                     :element-type type))))
       (read-array-bytes array stream)
       array)))
+
+(def (function e) copy-array (array)
+  "Create a new array with the same contents."
+  (let ((dims (array-dimensions array)))
+    (adjust-array
+     (make-array dims
+                 :element-type (array-element-type array)
+                 :displaced-to array)
+     dims)))
+
+(def function %portable-copy-array-data (src-array src-ofs dest-array dest-ofs count)
+  (declare (type fixnum src-ofs dest-ofs count)
+           (type array src-array dest-array))
+  (if (and (eq dest-array src-array) (> dest-ofs src-ofs))
+      (let ((dest-base (+ dest-ofs count -1))
+            (src-base (+ src-ofs count -1)))
+        (declare (type fixnum dest-base src-base))
+        (dotimes (i count)
+          (declare (fixnum i))
+          (setf (row-major-aref dest-array (- dest-base i))
+                (row-major-aref src-array (- src-base i)))))
+      (dotimes (i count)
+        (declare (fixnum i))
+        (setf (row-major-aref dest-array (+ dest-ofs i))
+              (row-major-aref src-array (+ src-ofs i))))))
+
+(def function %copy-array-data (src-array src-ofs dest-array dest-ofs count)
+  (declare (type fixnum src-ofs dest-ofs count)
+           (type array src-array dest-array))
+  #+ccl
+  (bind (((:values src-vec src-delta)   (ccl::array-data-and-offset src-array))
+         ((:values dest-vec dest-delta) (ccl::array-data-and-offset dest-array))
+         (src-index (+ src-delta src-ofs))
+         (dest-index (+ dest-delta dest-ofs)))
+    (cond
+      ;; Reference vector
+      ((and (ccl::gvectorp src-vec) (ccl::gvectorp dest-vec))
+       (ccl::%copy-gvector-to-gvector src-vec src-index dest-vec dest-index count))
+      ;; Unaligned bit move
+      ((and (or (bit-vector-p src-vec) (bit-vector-p dest-vec))
+            (or (logtest src-index 7) (logtest dest-index 7) (logtest count 7)))
+       (%portable-copy-array-data src-vec src-index dest-vec dest-index count))
+      ;; Raw data vector
+      ((and (ccl::ivectorp src-vec) (ccl::ivectorp dest-vec))
+       (let* ((type (ccl::typecode dest-vec))
+              (fixup (double-offset-fixup dest-vec))
+              (src-byte (+ fixup (ccl::subtag-bytes type src-index)))
+              (dest-byte (+ fixup (ccl::subtag-bytes type dest-index)))
+              (byte-count (ccl::subtag-bytes type count)))
+         (assert (eql type (ccl::typecode src-vec)))
+         (ccl::%copy-ivector-to-ivector src-vec src-byte dest-vec dest-byte byte-count)))
+      ;; Unknown
+      (t (error "Array type mismatch"))))
+  #+ecl
+  (if (and (eq dest-array src-array) (> dest-ofs src-ofs))
+      (%portable-copy-array-data src-array src-ofs dest-array dest-ofs count)
+      (ffi:c-inline
+          (dest-array dest-ofs src-array src-ofs count)
+          (:object :int :object :int :int) :void
+        "ecl_copy_subarray(#0,#1,#2,#3,#4)"
+        :one-liner t :side-effects t))
+  #-(or ccl ecl)
+  (%portable-copy-array-data src-array src-ofs dest-array dest-ofs count))
+
+(def (function e) copy-array-data (src-array src-ofs dest-array dest-ofs count)
+  "Copy data elements between arrays. If count is t, it is deduced."
+  (declare (type fixnum src-ofs dest-ofs))
+  (assert (equal (array-element-type dest-array)
+                 (array-element-type src-array)))
+  (let ((dest-size (array-total-size dest-array))
+        (src-size (array-total-size src-array)))
+    (declare (type fixnum dest-size src-size))
+    ;; Verify/deduce the region:
+    (assert (and (>= dest-ofs 0) (>= src-ofs 0))
+            (src-ofs dest-ofs)
+            "Negative offset in copy-array-data: ~A -> ~A"
+            src-ofs dest-ofs)
+    (if (eql count t)
+        (setf count (max 0 (min (- dest-size dest-ofs)
+                                (- src-size src-ofs))))
+        (assert (and (>= count 0)
+                     (<= (+ dest-ofs count) dest-size)
+                     (<= (+ src-ofs count) src-size))
+                (src-ofs dest-ofs count)
+                "Copy region out of bounds: ~A (~A left) -> ~A (~A left): ~A elements."
+                src-ofs (- src-size src-ofs)
+                dest-ofs (- dest-size dest-ofs) count))
+    ;; Copy data
+    (when (> count 0)
+      (%copy-array-data src-array src-ofs dest-array dest-ofs count))
+    ;; Return the count
+    count))
+
