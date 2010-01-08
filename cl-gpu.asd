@@ -19,7 +19,9 @@
                :hu.dwim.walker)
   :components ((:module "core"
                 :components ((:file "package")
-                             (:file "utils" :depends-on ("package"))))
+                             (:file "typedefs" :depends-on ("package"))
+                             (:file "utils" :depends-on ("package"))
+                             (:file "buffers" :depends-on ("typedefs" "utils"))))
                (:module "cuda"
                 :depends-on ("core")
                 :components (#+cuda (:file "driver-api")))))

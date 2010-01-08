@@ -20,4 +20,6 @@
         :metabang-bind
         :hu.dwim.walker)
 
-  (:export #:cuda-driver-error))
+  (:export #:cuda-driver-error #:buffer
+           #:int-8 #:int-16 #:int-32
+           #:uint-8 #:uint-16 #:uint-32))

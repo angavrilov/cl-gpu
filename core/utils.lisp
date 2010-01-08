@@ -155,32 +155,35 @@
   #-(or ccl ecl)
   (%portable-copy-array-data src-array src-ofs dest-array dest-ofs count))
 
+(declaim (ftype (function (fixnum fixnum fixnum fixnum t) fixnum)
+                adjust-copy-count))
+
+(def function adjust-copy-count (src-size src-ofs dest-size dest-ofs count)
+  (assert (and (>= dest-ofs 0) (>= src-ofs 0)))
+  (if (eql count t)
+      (max 0 (min (- dest-size dest-ofs)
+                  (- src-size src-ofs)))
+      (progn
+        (assert (and (>= count 0)
+                     (<= (+ dest-ofs count) dest-size)
+                     (<= (+ src-ofs count) src-size))
+                (count)
+                "Copy region out of bounds: ~A (~A left) -> ~A (~A left): ~A elements."
+                src-ofs (- src-size src-ofs)
+                dest-ofs (- dest-size dest-ofs) count)
+        count)))
+
 (def (function e) copy-array-data (src-array src-ofs dest-array dest-ofs count)
   "Copy data elements between arrays. If count is t, it is deduced."
-  (declare (type fixnum src-ofs dest-ofs))
   (assert (equal (array-element-type dest-array)
                  (array-element-type src-array)))
   (let ((dest-size (array-total-size dest-array))
         (src-size (array-total-size src-array)))
-    (declare (type fixnum dest-size src-size))
     ;; Verify/deduce the region:
-    (assert (and (>= dest-ofs 0) (>= src-ofs 0))
-            (src-ofs dest-ofs)
-            "Negative offset in copy-array-data: ~A -> ~A"
-            src-ofs dest-ofs)
-    (if (eql count t)
-        (setf count (max 0 (min (- dest-size dest-ofs)
-                                (- src-size src-ofs))))
-        (assert (and (>= count 0)
-                     (<= (+ dest-ofs count) dest-size)
-                     (<= (+ src-ofs count) src-size))
-                (src-ofs dest-ofs count)
-                "Copy region out of bounds: ~A (~A left) -> ~A (~A left): ~A elements."
-                src-ofs (- src-size src-ofs)
-                dest-ofs (- dest-size dest-ofs) count))
-    ;; Copy data
-    (when (> count 0)
-      (%copy-array-data src-array src-ofs dest-array dest-ofs count))
-    ;; Return the count
-    count))
+    (let ((rcount (adjust-copy-count src-size src-ofs dest-size dest-ofs count)))
+      ;; Copy data
+      (when (> rcount 0)
+        (%copy-array-data src-array src-ofs dest-array dest-ofs rcount))
+      ;; Return the count
+      rcount)))
 
