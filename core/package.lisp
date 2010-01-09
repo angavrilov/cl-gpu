@@ -12,6 +12,7 @@
   (:use :alexandria
         :anaphora
         :contextl
+        :bordeaux-threads
         :cffi
         :hu.dwim.common-lisp
         :hu.dwim.def
@@ -22,4 +23,5 @@
 
   (:export #:cuda-driver-error #:buffer
            #:int-8 #:int-16 #:int-32
-           #:uint-8 #:uint-16 #:uint-32))
+           #:uint-8 #:uint-16 #:uint-32
+           #:cuda-context #:cuda-context-device))

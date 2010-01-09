@@ -16,6 +16,7 @@
   :licence "LLGPL"
   :description "A library for writing GPU kernels in a subset of CL"
   :depends-on (:cffi
+               :bordeaux-threads
                :hu.dwim.walker)
   :components ((:module "core"
                 :components ((:file "package")

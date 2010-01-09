@@ -182,4 +182,89 @@
   (with-foreign-pointer-as-string (name 256 :encoding :ascii)
     (cuda-invoke cuDeviceGetName name 256 (cuda-device-handle device))))
 
+;;; Cuda contexts
 
+(defbitfield cuda-context-flags
+  (:sched-spin 1)
+  (:sched-yield 2)
+  (:blocking-sync 4)
+  (:map-host 8)
+  (:lmem-resize-to-max 16))
+
+(defctype cuda-context-handle :pointer)
+
+(defcfun "cuCtxCreate" cuda-error
+  (pctx (:pointer cuda-context-handle))
+  (flags cuda-context-flags)
+  (device :int))
+
+(defcfun "cuCtxDestroy" cuda-error
+  (ctx cuda-context-handle))
+
+(defstruct cuda-context
+  (device nil :read-only t)
+  (handle nil)
+  (thread nil)
+  (buffers nil))
+
+(defmethod print-object ((object cuda-context) stream)
+  (print-unreadable-object (object stream :identity t)
+    (format stream "CUDA Context @~A" (cuda-context-device object))
+    (unless (cuda-context-handle object)
+      (format stream " (DEAD)"))))
+
+(declaim (type (or cuda-context null) *cuda-context*)
+         (type hash-table *cuda-thread-contexts*)
+         (inline cuda-current-context))
+
+(defparameter *cuda-context* nil
+  "Current active CUDA context")
+
+(defvar *cuda-context-lock* (make-lock "CUDA context"))
+
+(defvar *cuda-context-list* nil
+  "List of all allocated contexts")
+
+(defvar *cuda-thread-contexts*
+  (make-hash-table :test #'eq #+sbcl :synchronized #+sbcl t)
+  "Table of thread-local context stacks")
+
+(def (function e) cuda-current-context ()
+  (or *cuda-context*
+      ;; Assuming that this is safe:
+      (first (gethash (current-thread) *cuda-thread-contexts*))))
+
+(def function cuda-ensure-context (context)
+  (let ((current (cuda-current-context)))
+    (unless (eq current context)
+      (error "CUDA context ~A needed, ~A current." context current))
+    current))
+
+(def macro with-cuda-context (context &body body)
+  `(let ((*cuda-context* (cuda-ensure-context ,context)))
+     ,@body))
+
+(def (function e) cuda-create-context (device &optional flags)
+  (with-lock-held (*cuda-context-lock*)
+    (with-foreign-object (phandle 'cuda-context-handle)
+      (cuda-invoke cuCtxCreate phandle (ensure-list flags) (cuda-device-handle device))
+      (let* ((thread (current-thread))
+             (context (make-cuda-context :device device
+                                         :handle (mem-ref phandle 'cuda-context-handle)
+                                         :thread thread)))
+        (push context *cuda-context-list*)
+        (push context (gethash thread *cuda-thread-contexts*))
+        context))))
+
+(def (function e) cuda-destroy-context (context)
+  (unless (cuda-context-handle context)
+    (error "Context already destroyed."))
+  (with-lock-held (*cuda-context-lock*)
+    (cuda-ensure-context context)
+    (assert (eq (cuda-context-thread context) (current-thread)))
+    (cuda-invoke cuCtxDestroy (cuda-context-handle context))
+    (setf (cuda-context-handle context) nil)
+    (setf (cuda-context-thread context) nil)
+    (deletef *cuda-context-list* context)
+    (deletef (gethash (current-thread) *cuda-thread-contexts*) context)
+    nil))
