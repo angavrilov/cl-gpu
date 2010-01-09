@@ -89,18 +89,43 @@
 
 ;;; Device count
 
+(declaim (type simple-vector *cuda-devices*))
+
+(defvar *cuda-devices* nil)
+
 (defcfun "cuDeviceGetCount" cuda-error
   (cnt-ptr (:pointer :int)))
 
-(def (function e) cuda-device-count ()
-  "Retrieve the number of installed CUDA-capable devices."
-  (with-foreign-object (pcount :int)
-    (cuda-invoke cuDeviceGetCount pcount)
-    (let ((count (mem-ref pcount :int)))
+(defcfun "cuDeviceGet" cuda-error
+  (ptr (:pointer :int))
+  (device-idx :int))
+
+(def function cuda-init-devices ()
+  (with-foreign-object (tmp :int)
+    (cuda-invoke cuDeviceGetCount tmp)
+    (let ((count (mem-ref tmp :int)))
+      (setf *cuda-devices*
+            (coerce (loop for i from 0 to (1- count)
+                       collect (progn
+                                 (cuda-invoke cuDeviceGet tmp i)
+                                 (mem-ref tmp :int)))
+                    'vector))
       (when (and (> count 0)
                  (equal (cuda-device-version 0) '(9999 . 9999)))
-        (setf count 0))
-      count)))
+        (setf *cuda-devices* #())))))
+
+(declaim (inline cuda-device-count cuda-device-handle))
+
+(def (function e) cuda-device-count ()
+  "Retrieve the number of installed CUDA-capable devices."
+  (unless *cuda-devices*
+    (cuda-init-devices))
+  (length *cuda-devices*))
+
+(def function cuda-device-handle (device)
+  (unless *cuda-devices*
+    (cuda-init-devices))
+  (svref *cuda-devices* device))
 
 ;;; Device capabilities
 
@@ -121,10 +146,8 @@
 
 (def (function e) cuda-device-attr (device attr)
   "Retrieve information about a CUDA device."
-  ;; The function hangs on negative values.
-  (check-type device (unsigned-byte 31))
   (with-foreign-object (tmp :int)
-    (cuda-invoke cuDeviceGetAttribute tmp attr device)
+    (cuda-invoke cuDeviceGetAttribute tmp attr (cuda-device-handle device))
     (mem-ref tmp :int)))
 
 (defcfun "cuDeviceComputeCapability" cuda-error
@@ -134,10 +157,9 @@
 
 (def (function e) cuda-device-version (device)
   "Retrieve the CUDA device version."
-  (check-type device (unsigned-byte 31))
   (with-foreign-objects ((pmajor :int)
                          (pminor :int))
-    (cuda-invoke cuDeviceComputeCapability pmajor pminor device)
+    (cuda-invoke cuDeviceComputeCapability pmajor pminor (cuda-device-handle device))
     (cons (mem-ref pmajor :int) (mem-ref pminor :int))))
 
 (defcfun "cuDeviceTotalMem" cuda-error
@@ -146,9 +168,8 @@
 
 (def (function e) cuda-device-total-mem (device)
   "Retrieve the total amount of RAM in a CUDA device."
-  (check-type device (unsigned-byte 31))
   (with-foreign-object (tmp :unsigned-int)
-    (cuda-invoke cuDeviceTotalMem tmp device)
+    (cuda-invoke cuDeviceTotalMem tmp (cuda-device-handle device))
     (mem-ref tmp :unsigned-int)))
 
 (defcfun "cuDeviceGetName" cuda-error
@@ -158,8 +179,7 @@
 
 (def (function e) cuda-device-name (device)
   "Retrieve the name of a CUDA device."
-  (check-type device (unsigned-byte 31))
   (with-foreign-pointer-as-string (name 256 :encoding :ascii)
-    (cuda-invoke cuDeviceGetName name 256 device)))
+    (cuda-invoke cuDeviceGetName name 256 (cuda-device-handle device))))
 
 
