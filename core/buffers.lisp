@@ -28,7 +28,14 @@
 (def (generic e) buffer-element-type (buffer)
   (:documentation "Returns the lisp element type of the buffer.")
   (:method ((buffer array))
-    (array-element-type buffer)))
+    (array-element-type buffer))
+  (:method ((buffer t))
+    (foreign-to-lisp-elt-type (buffer-foreign-type buffer))))
+
+(def (generic e) buffer-foreign-type (buffer)
+  (:documentation "Returns the foreign element type of the buffer.")
+  (:method ((buffer array))
+    (lisp-to-foreign-elt-type (array-element-type buffer))))
 
 (def (generic e) buffer-rank (buffer)
   (:documentation "Returns the array rank of the buffer.")

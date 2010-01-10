@@ -78,3 +78,13 @@
     (copy-array-data arr1 0 arr2 0 t)
     (copy-array-data arr2 6 arr2 2 6)
     (is (every #'eql arr2 #*1010010001001101))))
+
+(def test test/utils/types ()
+  (is (equal (cl-gpu::canonify-lisp-type '(unsigned-byte 10)) 'uint16))
+  (is (equal (cl-gpu::canonify-foreign-type :unsigned-short) :uint16))
+  (is (equal (lisp-to-foreign-type '(unsigned-byte 10)) :uint16))
+  (is (equal (lisp-to-foreign-elt-type '(unsigned-byte 10)) nil))
+  (is (equal (lisp-to-foreign-elt-type '(unsigned-byte 32)) :uint32))
+  (is (equal (foreign-to-lisp-type :uint16) 'uint16))
+  (is (equal (foreign-to-lisp-elt-type :uint32)
+             (upgraded-array-element-type 'uint32))))

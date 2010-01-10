@@ -23,6 +23,6 @@
         :hu.dwim.walker)
 
   (:export #:cuda-driver-error #:buffer
-           #:int-8 #:int-16 #:int-32
-           #:uint-8 #:uint-16 #:uint-32
+           #:int8 #:int16 #:int32 #:int64
+           #:uint8 #:uint16 #:uint32 #:uint64
            #:cuda-context #:cuda-context-device))
