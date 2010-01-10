@@ -205,11 +205,15 @@
   (device nil :read-only t)
   (handle nil)
   (thread nil)
-  (buffers nil))
+  (blocks nil))
 
 (defmethod print-object ((object cuda-context) stream)
   (print-unreadable-object (object stream :identity t)
-    (format stream "CUDA Context @~A" (cuda-context-device object))
+    (format stream "CUDA Context @~A ~AKb"
+            (cuda-context-device object)
+            (ceiling (reduce #'+ (mapcar #'cuda-linear-extent
+                                         (cuda-context-blocks object)))
+                     1024))
     (unless (cuda-context-handle object)
       (format stream " (DEAD)"))))
 
@@ -234,13 +238,17 @@
       ;; Assuming that this is safe:
       (first (gethash (current-thread) *cuda-thread-contexts*))))
 
+(def (function e) cuda-valid-context-p (context)
+  (and (cuda-context-p context)
+       (not (null (cuda-context-handle context)))))
+
 (def function cuda-ensure-context (context)
   (let ((current (cuda-current-context)))
     (unless (eq current context)
       (error "CUDA context ~A needed, ~A current." context current))
     current))
 
-(def macro with-cuda-context (context &body body)
+(def macro with-cuda-context ((context) &body body)
   `(let ((*cuda-context* (cuda-ensure-context ,context)))
      ,@body))
 
@@ -260,11 +268,189 @@
   (unless (cuda-context-handle context)
     (error "Context already destroyed."))
   (with-lock-held (*cuda-context-lock*)
+    ;; Verify correctness
     (cuda-ensure-context context)
     (assert (eq (cuda-context-thread context) (current-thread)))
+    ;; Destroy the context
     (cuda-invoke cuCtxDestroy (cuda-context-handle context))
+    ;; Unlink the descriptor
     (setf (cuda-context-handle context) nil)
     (setf (cuda-context-thread context) nil)
     (deletef *cuda-context-list* context)
     (deletef (gethash (current-thread) *cuda-thread-contexts*) context)
+    ;; Wipe the blocks
+    (dolist (blk (cuda-context-blocks context))
+      (setf (cuda-linear-handle blk) nil))
     nil))
+
+;;; Linear memory
+
+(defctype cuda-device-ptr :unsigned-int)
+
+;; allocation
+(defcfun "cuMemAlloc" cuda-error
+  (pptr (:pointer cuda-device-ptr))
+  (bytes :unsigned-int))
+
+(defcfun "cuMemAllocPitch" cuda-error
+  (pptr (:pointer cuda-device-ptr))
+  (ppitch (:pointer :unsigned-int))
+  (byte-width :unsigned-int)
+  (height :unsigned-int)
+  (element-size :unsigned-int))
+
+(defcfun "cuMemFree" cuda-error
+  (ptr cuda-device-ptr))
+
+;; transfer
+(defcfun "cuMemcpyDtoD" cuda-error
+  (dst cuda-device-ptr)
+  (src cuda-device-ptr)
+  (bytes :unsigned-int))
+
+(defcfun "cuMemcpyDtoH" cuda-error
+  (dst :pointer)
+  (src cuda-device-ptr)
+  (bytes :unsigned-int))
+
+(defcfun "cuMemcpyHtoD" cuda-error
+  (dst cuda-device-ptr)
+  (src :pointer)
+  (bytes :unsigned-int))
+
+;; memset
+(defcfun "cuMemsetD8" cuda-error
+  (ptr   cuda-device-ptr)
+  (item  :uint8)
+  (count :unsigned-int))
+
+(defcfun "cuMemsetD16" cuda-error
+  (ptr   cuda-device-ptr)
+  (item  :uint16)
+  (count :unsigned-int))
+
+(defcfun "cuMemsetD32" cuda-error
+  (ptr   cuda-device-ptr)
+  (item  :uint32)
+  (count :unsigned-int))
+
+(defcfun "cuMemsetD2D8" cuda-error
+  (ptr    cuda-device-ptr)
+  (pitch  :unsigned-int)
+  (item   :uint8)
+  (width  :unsigned-int)
+  (height :unsigned-int))
+
+(defcfun "cuMemsetD2D16" cuda-error
+  (ptr    cuda-device-ptr)
+  (pitch  :unsigned-int)
+  (item   :uint16)
+  (width  :unsigned-int)
+  (height :unsigned-int))
+
+(defcfun "cuMemsetD2D32" cuda-error
+  (ptr    cuda-device-ptr)
+  (pitch  :unsigned-int)
+  (item   :uint32)
+  (width  :unsigned-int)
+  (height :unsigned-int))
+
+;; 2d copy
+(defctype cuda-array :pointer)
+
+(defcenum cuda-memory-type
+  (:host 1)
+  (:device 2)
+  (:array 3))
+
+(defcstruct cuda-memcpy-2d
+  ;; Source
+  (src-x-bytes :unsigned-int)
+  (src-y       :unsigned-int)
+  (src-type    cuda-memory-type)
+  (src-host    :pointer)
+  (src-device  cuda-device-ptr)
+  (src-array   cuda-array)
+  (src-pitch   :unsigned-int)
+  ;; Destination
+  (dst-x-bytes :unsigned-int)
+  (dst-y       :unsigned-int)
+  (dst-type    cuda-memory-type)
+  (dst-host    :pointer)
+  (dst-device  cuda-device-ptr)
+  (dst-array   cuda-array)
+  (dst-pitch   :unsigned-int)
+  ;; General
+  (width-bytes :unsigned-int)
+  (height      :unsigned-int))
+
+(defcfun "cuMemcpy2D" cuda-error
+  (pspec (:pointer cuda-memcpy-2d)))
+
+;; block descriptor
+
+(defstruct cuda-linear
+  (refcnt 1 :type fixnum)
+  (context nil :type cuda-context :read-only t)
+  (size 0 :type fixnum :read-only t)
+  (extent 0 :type fixnum :read-only t)
+  (width 0 :type fixnum :read-only t)
+  (height 0 :type fixnum :read-only t)
+  (pitch 0 :type fixnum :read-only t)
+  (handle nil))
+
+(declaim (inline cuda-linear-pitched-p cuda-linear-valid-p))
+
+(def function cuda-linear-valid-p (blk)
+  (and (cuda-linear-p blk)
+       (not (null (cuda-linear-handle blk)))))
+
+(def function cuda-linear-pitched-p (blk)
+  (not (eql (cuda-linear-height blk) 1)))
+
+(defmethod print-object ((object cuda-linear) stream)
+  (print-unreadable-object (object stream :identity t)
+    (format stream "CUDA Block ~AKb " (ceiling (cuda-linear-extent object) 1024))
+    (if (cuda-linear-pitched-p object)
+        (format stream "~A+~Ax~A" (cuda-linear-width object)
+                (- (cuda-linear-pitch object) (cuda-linear-width object))
+                (cuda-linear-height object))
+        (format stream "~A" (cuda-linear-size object)))
+    (unless (cuda-linear-handle object)
+      (format stream " (DEAD)"))))
+
+(def function cuda-alloc-linear (width height &key pitch-for)
+  (assert (and (> width 0) (> height 0)) (width height)
+          "Invalid linear dimensions: ~A x ~A" width height)
+  (assert (cuda-valid-context-p (cuda-current-context)))
+  (let ((context (cuda-current-context))
+        (size (* width height)))
+    (multiple-value-bind (handle pitch)
+        (if (and pitch-for (> height 1))
+            (with-foreign-objects ((phandle 'cuda-device-ptr)
+                                   (ppitch :unsigned-int))
+              (cuda-invoke cuMemAllocPitch phandle ppitch
+                           width height pitch-for)
+              (values (mem-ref phandle 'cuda-device-ptr)
+                      (mem-ref ppitch :unsigned-int)))
+            (with-foreign-object (phandle 'cuda-device-ptr)
+              (cuda-invoke cuMemAlloc phandle size)
+              (values (mem-ref phandle 'cuda-device-ptr)
+                      width)))
+      (when (= pitch width)
+        (setf pitch size width size height 1))
+      (let ((blk (make-cuda-linear :context context :handle handle
+                                   :size size :extent (* height pitch)
+                                   :width width :height height :pitch pitch)))
+        (push blk (cuda-context-blocks context))
+        blk))))
+
+(def function cuda-free-linear (blk)
+  (if (cuda-linear-handle blk)
+      (let ((context (cuda-linear-context blk)))
+        (with-cuda-context (context)
+          (cuda-invoke cuMemFree (cuda-linear-handle blk))
+          (setf (cuda-linear-handle blk) nil)
+          (deletef (cuda-context-blocks context) blk)
+          nil))
+      (cerror "ignore" "CUDA block already destroyed.")))

@@ -8,6 +8,7 @@
 
 (defpackage :cl-gpu
   (:documentation "A library for writing GPU code in a subset of CL")
+  (:nicknames #:gpu)
 
   (:use :alexandria
         :anaphora
