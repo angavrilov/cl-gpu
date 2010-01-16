@@ -14,6 +14,14 @@
   "A buffer is an arrayish object; includes normal arrays."
   '(satisfies bufferp))
 
+(def (generic e) ref-buffer (buffer)
+  (:documentation "Increase the reference count on the buffer.")
+  (:method ((buffer t)) nil))
+
+(def (generic e) deref-buffer (buffer)
+  (:documentation "Decrease the reference count on the buffer.")
+  (:method ((buffer t)) t))
+
 (def (generic e) buffer-as-array (buffer)
   (:documentation "Returns the buffer converted to an array.")
   (:method ((buffer array))
@@ -65,11 +73,13 @@
   (:method ((buffer array) &rest indexes)
     (apply #'array-row-major-index buffer indexes))
   (:method ((buffer t) &rest indexes)
-    (loop with index = (car indexes)
-       for i from 1
-       for idx in (cdr indexes)
-       do (setf index
-                (+ (* (buffer-dimension buffer i) index) idx))
+    (loop with index = 0
+       for idx in indexes
+       for i from 0
+       do (let ((dim (buffer-dimension buffer i)))
+            (unless (and (>= idx 0) (< idx dim))
+              (error "Index ~S is out of bounds for ~S" indexes buffer))
+            (setf index (+ (* dim index) idx)))
        finally (return index))))
 
 (def (generic e) bref (buffer &rest indexes)
@@ -96,6 +106,19 @@
   (:documentation "Updates an element of the buffer.")
   (:method (value (buffer array) index)
     (setf (row-major-aref buffer index) value)))
+
+(def (generic e) buffer-fill (buffer value &key start end)
+  (:documentation "Fills the buffer with the specified value.")
+  (:method ((buffer vector) value &key (start 0) end)
+    (fill buffer value :start start :end end))
+  (:method ((buffer array) value &key (start 0) end)
+    (loop for i from start below (or end (array-total-size buffer))
+       do (setf (row-major-aref buffer i) value))
+    buffer)
+  (:method ((buffer t) value &key (start 0) end)
+    (loop for i from start below (or end (buffer-size buffer))
+       do (setf (row-major-bref buffer i) value))
+    buffer))
 
 (def (generic e) %copy-buffer-data (src dst src-offset dst-offset count)
   (:documentation "Copies a subset of elements from src to dst. Counts and offsets must be correct.")

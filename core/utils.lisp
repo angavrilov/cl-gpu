@@ -92,6 +92,18 @@
       (read-array-bytes array stream)
       array)))
 
+(def function compute-strides (dims elt-size max-size)
+  (let ((strides (nconc (maplist (lambda (rdims)
+                                   (reduce #'* rdims :initial-value elt-size))
+                                 dims)
+                        (list elt-size))))
+    (when (> (first strides) max-size)
+      (error "Dimensions ~S*~A exceed the block size ~A" dims elt-size max-size))
+    (rest strides)))
+
+(def function to-uint32-vector (list)
+  (make-array (length list) :element-type '(unsigned-byte 32) :initial-contents list))
+
 (def (function e) copy-array (array)
   "Create a new array with the same contents."
   (let ((dims (array-dimensions array)))

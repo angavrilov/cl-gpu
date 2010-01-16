@@ -25,4 +25,5 @@
                              (:file "buffers" :depends-on ("typedefs" "utils"))))
                (:module "cuda"
                 :depends-on ("core")
-                :components (#+cuda (:file "driver-api")))))
+                :components (#+cuda (:file "driver-api")
+                             #+cuda (:file "device-mem" :depends-on ("driver-api"))))))

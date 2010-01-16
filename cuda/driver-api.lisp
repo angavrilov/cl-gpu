@@ -207,6 +207,16 @@
   (thread nil)
   (blocks nil))
 
+(defstruct cuda-linear
+  (refcnt 1 :type fixnum)
+  (context nil :type cuda-context :read-only t)
+  (size 0 :type fixnum :read-only t)
+  (extent 0 :type fixnum :read-only t)
+  (width 0 :type fixnum :read-only t)
+  (height 0 :type fixnum :read-only t)
+  (pitch 0 :type fixnum :read-only t)
+  (handle nil))
+
 (defmethod print-object ((object cuda-context) stream)
   (print-unreadable-object (object stream :identity t)
     (format stream "CUDA Context @~A ~AKb"
@@ -389,17 +399,7 @@
 
 ;; block descriptor
 
-(defstruct cuda-linear
-  (refcnt 1 :type fixnum)
-  (context nil :type cuda-context :read-only t)
-  (size 0 :type fixnum :read-only t)
-  (extent 0 :type fixnum :read-only t)
-  (width 0 :type fixnum :read-only t)
-  (height 0 :type fixnum :read-only t)
-  (pitch 0 :type fixnum :read-only t)
-  (handle nil))
-
-(declaim (inline cuda-linear-pitched-p cuda-linear-valid-p))
+(declaim (inline cuda-linear-pitched-p cuda-linear-valid-p cuda-linear-adjust-offset))
 
 (def function cuda-linear-valid-p (blk)
   (and (cuda-linear-p blk)
@@ -408,9 +408,17 @@
 (def function cuda-linear-pitched-p (blk)
   (not (eql (cuda-linear-height blk) 1)))
 
+(def function cuda-linear-adjust-offset (blk offset)
+  (if (cuda-linear-pitched-p blk)
+      (multiple-value-bind (div rem) (floor offset (cuda-linear-width blk))
+        (+ (* div (cuda-linear-pitch blk)) rem))
+      offset))
+
 (defmethod print-object ((object cuda-linear) stream)
   (print-unreadable-object (object stream :identity t)
-    (format stream "CUDA Block ~AKb " (ceiling (cuda-linear-extent object) 1024))
+    (format stream "CUDA Block ~AKb &~A "
+            (ceiling (cuda-linear-extent object) 1024)
+            (cuda-linear-refcnt object))
     (if (cuda-linear-pitched-p object)
         (format stream "~A+~Ax~A" (cuda-linear-width object)
                 (- (cuda-linear-pitch object) (cuda-linear-width object))
@@ -454,3 +462,114 @@
           (deletef (cuda-context-blocks context) blk)
           nil))
       (cerror "ignore" "CUDA block already destroyed.")))
+
+(def function %cuda-linear-wrap-pitch (blk offset size transfer-chunk transfer-rows)
+  "Computes ranges for exchange of data between the host and a possibly pitched block."
+  (declare (type cuda-linear blk)
+           (fixnum offset size)
+           ;; dev-offset host-offset size
+           (type (function (fixnum fixnum fixnum) t) transfer-chunk)
+           ;; host-offset width pitch start-row row-count
+           (type (function (fixnum fixnum fixnum fixnum fixnum) t) transfer-rows))
+  (with-cuda-context ((cuda-linear-context blk))
+    (if (not (cuda-linear-pitched-p blk))
+        ;; Contiguous
+        (funcall transfer-chunk offset 0 size)
+        ;; Pitched, i.e. has gaps
+        (bind ((width (cuda-linear-width blk))
+               (pitch (cuda-linear-pitch blk))
+               ((:values start-y start-x) (floor offset width))
+               ((:values end-y end-x) (floor (+ offset size) width))
+               (middle-size (- end-y start-y 1))
+               (middle-p (> middle-size 0))
+               (host-shift (- width start-x)))
+          (declare (fixnum width pitch start-x start-y end-x end-y host-shift middle-size))
+          ;; Fits in one row?
+          (if (or (= start-y end-y) (and (not middle-p) (= end-x 0)))
+              ;; Yes!
+              (funcall transfer-chunk (+ (* start-y pitch) start-x) 0 size)
+              ;; Spans multiple rows:
+              (progn
+                ;; First row
+                (if (and middle-p (= start-x 0)) ; Promote a full row
+                    (setf start-y (1- start-y)
+                          middle-size (1+ middle-size)
+                          host-shift 0)
+                    (funcall transfer-chunk (+ (* start-y pitch) start-x) 0 host-shift))
+                ;; Middle area
+                (when middle-p
+                  (funcall transfer-rows host-shift width pitch (1+ start-y) middle-size))
+                ;; Final row
+                (when (> end-x 0)
+                  (funcall transfer-chunk (* pitch end-y) (+ (* width middle-size) host-shift) end-x))))))))
+
+
+(def function %cuda-linear-dh-transfer (blk ptr offset size to-host-p)
+  "Moves data between a contiguous host memory area and possibly pitched linear block."
+  (declare (type cuda-linear blk)
+           (fixnum offset size))
+  (let ((handle (cuda-linear-handle blk)))
+    (assert (not (null handle)))
+    (flet ((transfer-chunk (dev-ofs host-ofs size)
+             (declare (fixnum dev-ofs host-ofs size))
+             (when (> size 0)
+               (let ((dev-ptr (+ handle dev-ofs))
+                     (host-ptr (inc-pointer ptr host-ofs)))
+                 (if to-host-p
+                     (cuda-invoke cuMemcpyDtoH host-ptr dev-ptr size)
+                     (cuda-invoke cuMemcpyHtoD dev-ptr host-ptr size)))))
+           (transfer-rows (host-shift width pitch start-row row-count)
+             (declare (fixnum host-shift width pitch start-row row-count))
+             (with-foreign-object (pmovespec 'cuda-memcpy-2d)
+               (with-foreign-slots ((src-x-bytes src-y src-type src-host src-device src-pitch
+                                                 dst-x-bytes dst-y dst-type dst-host dst-device dst-pitch
+                                                 width-bytes height)
+                                    pmovespec cuda-memcpy-2d)
+                 (setf width-bytes width
+                       height row-count
+                       src-x-bytes 0
+                       dst-x-bytes 0)
+                 (if to-host-p
+                     (setf src-y start-row    src-pitch pitch
+                           src-type :device   src-device handle
+                           dst-y 0            dst-pitch width
+                           dst-type :host     dst-host (inc-pointer ptr host-shift))
+                     (setf src-y 0            src-pitch width
+                           src-type :host     src-host (inc-pointer ptr host-shift)
+                           dst-y start-row    dst-pitch pitch
+                           dst-type :device   dst-device handle)))
+               ;; Do the 2D transfer
+               (cuda-invoke cuMemcpy2D pmovespec))))
+      (declare (dynamic-extent #'transfer-chunk #'transfer-rows))
+      (%cuda-linear-wrap-pitch blk offset size #'transfer-chunk #'transfer-rows))))
+
+(def function %cuda-linear-memset (blk index count type value)
+  "Fills the linear block region with the same value."
+  (multiple-value-bind (elt-size ivalue)
+      (with-foreign-object (ptmp type)
+        (setf (mem-ref ptmp type) value)
+        (ecase (foreign-type-size type)
+          (1 (values 1 (mem-ref ptmp :uint8)))
+          (2 (values 2 (mem-ref ptmp :uint16)))
+          (4 (values 4 (mem-ref ptmp :uint32)))))
+    (let ((handle (cuda-linear-handle blk)))
+      (assert (not (null handle)))
+      (flet ((fill-chunk (dev-ofs host-ofs size)
+               (declare (fixnum dev-ofs host-ofs size)
+                        (ignore host-ofs))
+               (when (> size 0)
+                 (let ((dev-ptr (+ handle dev-ofs)))
+                   (ecase elt-size
+                     (1 (cuda-invoke cuMemsetD8 dev-ptr ivalue size))
+                     (2 (cuda-invoke cuMemsetD16 dev-ptr ivalue (ash size -1)))
+                     (4 (cuda-invoke cuMemsetD32 dev-ptr ivalue (ash size -2)))))))
+             (fill-rows (host-shift width pitch start-row row-count)
+               (declare (fixnum host-shift width pitch start-row row-count)
+                        (ignore host-shift))
+               (let ((dev-ptr (+ handle (* pitch start-row))))
+                 (ecase elt-size
+                   (1 (cuda-invoke cuMemsetD2D8 dev-ptr pitch ivalue width row-count))
+                   (2 (cuda-invoke cuMemsetD2D16 dev-ptr pitch ivalue (ash width -1) row-count))
+                   (4 (cuda-invoke cuMemsetD2D32 dev-ptr pitch ivalue (ash width -2) row-count))))))
+        (declare (dynamic-extent #'fill-chunk #'fill-rows))
+        (%cuda-linear-wrap-pitch blk (* index elt-size) (* count elt-size) #'fill-chunk #'fill-rows)))))
