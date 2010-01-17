@@ -76,3 +76,24 @@
                   collect (row-major-bref *cuda-arr1* i))
                (loop for i from 0 below 25
                   collect (float (if (or (< i 2) (>= i 23)) i 0.5)))))))
+
+(def test test/cuda-driver/copy-array-buffer ()
+  (with-fixture cuda-context
+    (let ((arr1 (make-array '(5 5) :element-type 'single-float))
+          (arr2 (make-array 25 :element-type 'single-float :initial-element 1.0)))
+      (buffer-fill *cuda-arr1* 0)
+      (copy-full-buffer *cuda-arr1* arr2)
+      (is (equal (loop for i from 0 below 25 collect (aref arr2 i))
+                 (loop for i from 0 below 25 collect 0.0)))
+      (loop for i from 0 below 25
+         do (setf (row-major-aref arr1 i) (float i)))
+      (copy-full-buffer arr1 *cuda-arr1*)
+      (is (equal (loop for i from 0 below 25
+                    collect (row-major-bref *cuda-arr1* i))
+                 (loop for i from 0 below 25 collect (float i))))
+      (buffer-fill arr2 0.5)
+      (copy-buffer-data arr2 2 *cuda-arr1* 2 (- 23 2))
+      (is (equal (loop for i from 0 below 25
+                    collect (row-major-bref *cuda-arr1* i))
+                 (loop for i from 0 below 25
+                    collect (float (if (or (< i 2) (>= i 23)) i 0.5))))))))

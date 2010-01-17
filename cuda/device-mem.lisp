@@ -128,21 +128,19 @@
           (%cuda-linear-memset blk start count elt-type value)))
     buffer))
 
-#|
+(def method %copy-buffer-data ((src array) (dst cuda-mem-array) src-offset dst-offset count)
+  (with-slots (blk elt-type elt-size) dst
+    (unless (equal (buffer-foreign-type src) elt-type)
+      (error "Element type mismatch: ~S and ~S" src dst))
+    (with-pointer-to-array (ptr src)
+      (%cuda-linear-dh-transfer blk (inc-pointer ptr (* src-offset elt-size))
+                                (* dst-offset elt-size) (* count elt-size) nil))))
 
-(def (generic e) %copy-buffer-data (src dst src-offset dst-offset count)
-  (:documentation "Copies a subset of elements from src to dst. Counts and offsets must be correct.")
-  (:method ((src array) (dst array) src-offset dst-offset count)
-    (copy-array-data src src-offset dst dst-offset count))
-  (:method ((src t) (dst t) src-offset dst-offset count)
-    ;; Fallback to a temporary array. This requires
-    ;; a type check to avoid an infinite recursion.
-    (cond ((arrayp src) (error "Cannot copy array -> ~A" dst))
-          ((arrayp dst) (error "Cannot copy ~A -> array" src))
-          (t
-           (let ((tmp (make-array count :element-type (buffer-element-type src))))
-             (%copy-buffer-data src tmp src-offset 0 count)
-             (%copy-buffer-data tmp dst 0 dst-offset count))))))
+(def method %copy-buffer-data ((src cuda-mem-array) (dst array) src-offset dst-offset count)
+  (with-slots (blk elt-type elt-size) src
+    (unless (equal elt-type (buffer-foreign-type dst))
+      (error "Element type mismatch: ~S and ~S" src dst))
+    (with-pointer-to-array (ptr dst)
+      (%cuda-linear-dh-transfer blk (inc-pointer ptr (* dst-offset elt-size))
+                                (* src-offset elt-size) (* count elt-size) t))))
 
-
-|#

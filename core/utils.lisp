@@ -27,6 +27,28 @@
            (size (ccl::subtag-bytes typecode (array-total-size arr))))
       (values ivector base size))))
 
+#+ecl
+(defun %array-address (arr)
+  "Return the address of array's data."
+  (check-type arr array)
+  (ffi:c-inline (arr) (object) :unsigned-long
+    "switch (#0->array.elttype) {
+       case aet_object: FEerror(\"Not a specialized array: ~S\", 1, #0); break;
+       case aet_bit: FEerror(\"Cannot get a pointer to a bit array: ~S\", 1, #0); break;
+       default: @(return) = (unsigned long) #0->array.self.b8;
+     }"))
+
+(def macro with-pointer-to-array ((ptr-var arr) &body code)
+  #+ccl
+  (with-unique-names (iv bv)
+    `(multiple-value-bind (,iv ,bv) (array-ivector-range ,arr)
+       (ccl:with-pointer-to-ivector (,ptr-var ,iv)
+         (incf-pointer ,ptr-var ,bv)
+         ,@code)))
+  #+ecl
+  `(let ((,ptr-var (make-pointer (%array-address ,arr))))
+     ,@code))
+
 (def (function e) write-array-bytes (array stream)
   "Write the contents of the array to a binary stream."
   #+ecl (write-sequence (ext:array-raw-data array) stream)

@@ -483,7 +483,7 @@
                (middle-size (- end-y start-y 1))
                (middle-p (> middle-size 0))
                (host-shift (- width start-x)))
-          (declare (fixnum width pitch start-x start-y end-x end-y host-shift middle-size))
+          (declare (fixnum #-ecl width pitch start-x start-y end-x end-y host-shift middle-size))
           ;; Fits in one row?
           (if (or (= start-y end-y) (and (not middle-p) (= end-x 0)))
               ;; Yes!
