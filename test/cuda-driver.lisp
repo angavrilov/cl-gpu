@@ -52,6 +52,22 @@
                            (:rows 4 20 64 1 2)
                            (:chunk 192 44 12))))))
 
+(defun zero-buffer? (buf)
+  (loop for i from 0 below (buffer-size buf)
+     always (= (row-major-bref buf i) 0)))
+
+(defun buffer-filled? (buf value &key (start 0) (end (buffer-size buf)))
+  (loop for i from start below end
+     always (= (row-major-bref buf i) value)))
+
+(defun set-index-buffer (buf)
+  (loop for i from 0 below (buffer-size buf)
+     do (setf (row-major-bref buf i) (float i))))
+
+(defun index-buffer? (buf &key (start 0) (end (buffer-size buf)) (shift 0))
+  (loop for i from start below end
+     always (= (row-major-bref buf i) (+ i shift))))
+
 (def test test/cuda-driver/basic-buffer ()
   (with-fixture cuda-context
     (is (= (buffer-rank *cuda-arr1*) 2))
@@ -60,22 +76,16 @@
     (is (eql (buffer-foreign-type *cuda-arr1*) :float))
     (is (eql (buffer-element-type *cuda-arr1*) 'single-float))
     (is (eq (buffer-fill *cuda-arr1* 0) *cuda-arr1*))
-    (is (equal (loop for i from 0 below 25
-                  collect (row-major-bref *cuda-arr1* i))
-               (loop for i from 0 below 25 collect 0.0)))
-    (loop for i from 0 below 25
-       do (setf (row-major-bref *cuda-arr1* i) (float i)))
-    (is (equal (loop for i from 0 below 25
-                  collect (row-major-bref *cuda-arr1* i))
-               (loop for i from 0 below 25 collect (float i))))
+    (is (zero-buffer? *cuda-arr1*))
+    (set-index-buffer *cuda-arr1*)
+    (is (index-buffer? *cuda-arr1*))
     (is (equal (loop for i from 0 below 5
                   collect (bref *cuda-arr1* 1 i))
                (loop for i from 0 below 5 collect (float (+ i 5)))))
     (buffer-fill *cuda-arr1* 0.5 :start 2 :end 23)
-    (is (equal (loop for i from 0 below 25
-                  collect (row-major-bref *cuda-arr1* i))
-               (loop for i from 0 below 25
-                  collect (float (if (or (< i 2) (>= i 23)) i 0.5)))))))
+    (is (index-buffer? *cuda-arr1* :start 0 :end 2))
+    (is (index-buffer? *cuda-arr1* :start 23))
+    (is (buffer-filled? *cuda-arr1* 0.5 :start 2 :end 23))))
 
 (def test test/cuda-driver/copy-array-buffer ()
   (with-fixture cuda-context
@@ -83,17 +93,15 @@
           (arr2 (make-array 25 :element-type 'single-float :initial-element 1.0)))
       (buffer-fill *cuda-arr1* 0)
       (copy-full-buffer *cuda-arr1* arr2)
-      (is (equal (loop for i from 0 below 25 collect (aref arr2 i))
-                 (loop for i from 0 below 25 collect 0.0)))
-      (loop for i from 0 below 25
-         do (setf (row-major-aref arr1 i) (float i)))
+      (is (zero-buffer? arr2))
+      (set-index-buffer arr1)
       (copy-full-buffer arr1 *cuda-arr1*)
-      (is (equal (loop for i from 0 below 25
-                    collect (row-major-bref *cuda-arr1* i))
-                 (loop for i from 0 below 25 collect (float i))))
+      (is (index-buffer? *cuda-arr1*))
       (buffer-fill arr2 0.5)
       (copy-buffer-data arr2 2 *cuda-arr1* 2 (- 23 2))
-      (is (equal (loop for i from 0 below 25
-                    collect (row-major-bref *cuda-arr1* i))
-                 (loop for i from 0 below 25
-                    collect (float (if (or (< i 2) (>= i 23)) i 0.5))))))))
+      (is (index-buffer? *cuda-arr1* :start 0 :end 2))
+      (is (index-buffer? *cuda-arr1* :start 23))
+      (is (buffer-filled? *cuda-arr1* 0.5 :start 2 :end 23)))))
+
+
+
