@@ -6,6 +6,13 @@
 
 (in-package :cl-gpu)
 
+(def macro with-anaphoric-names ((namelist &key prefix) &body code)
+  "Defines symbols in the list as symbols in the current package with the same names."
+  `(let ,(mapcar (lambda (name)
+                   `(,name (symbolicate ,@(ensure-list prefix) ',name)))
+                 namelist)
+     ,@code))
+
 #+ccl
 (def function double-offset-fixup (ivector)
   (case (ccl::typecode ivector)

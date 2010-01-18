@@ -32,9 +32,9 @@
                                         initial-element)
   (unless foreign-type
     (error "Invalid cuda array type: ~S" (if ft-p foreign-type element-type)))
-  (let* ((dim-list (ensure-list dims))
-         (head-dims (butlast dim-list pitch-level))
-         (tail-dims (last dim-list pitch-level))
+  (let* ((dims (ensure-list dims))
+         (head-dims (butlast dims pitch-level))
+         (tail-dims (last dims pitch-level))
          (size (reduce #'* dims))
          (elt-size (foreign-type-size foreign-type)))
     (when (and initial-element
@@ -143,4 +143,16 @@
     (with-pointer-to-array (ptr dst)
       (%cuda-linear-dh-transfer blk (inc-pointer ptr (* dst-offset elt-size))
                                 (* src-offset elt-size) (* count elt-size) t))))
+
+(def method %copy-buffer-data ((src cuda-mem-array) (dst cuda-mem-array) src-offset dst-offset count)
+  (with-slots ((s-blk blk) (s-elt-type elt-type) elt-size) src
+    (with-slots ((d-blk blk) (d-elt-type elt-type)) dst
+      (unless (eql s-elt-type d-elt-type)
+        (error "Element type mismatch: ~S and ~S" src dst))
+      (when (eql (%cuda-linear-dd-transfer s-blk (* src-offset elt-size) d-blk (* dst-offset elt-size)
+                                           (* count elt-size)
+                                           :return-if-mismatch :misaligned)
+                 :misaligned)
+        (warn "Misaligned pitch copy, falling back to intermediate host array.")
+        (call-next-method)))))
 

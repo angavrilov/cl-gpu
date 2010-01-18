@@ -18,11 +18,20 @@
 
 (defvar *cuda-ctx*)
 (defvar *cuda-arr1*)
+(defvar *cuda-arr2*)
+(defvar *cuda-arr3*)
+(defvar *cuda-arr4*)
 
 (defixture cuda-context
   (:setup (setf *cuda-ctx* (cuda-create-context 0))
           (setf *cuda-arr1* (cuda-make-array '(5 5) :element-type 'single-float
-                                             :pitch-elt-size 4 :initial-element 0.0)))
+                                             :pitch-elt-size 4 :initial-element 0.0))
+          (setf *cuda-arr2* (cuda-make-array '(5 5) :element-type 'single-float
+                                             :pitch-elt-size 4 :initial-element 0.0))
+          (setf *cuda-arr3* (cuda-make-array '(5 5) :element-type 'single-float
+                                             :pitch-elt-size 16 :initial-element 0))
+          (setf *cuda-arr4* (cuda-make-array '(5 5) :element-type 'single-float
+                                             :initial-element 0)))
   (:teardown (cuda-destroy-context *cuda-ctx*)))
 
 (def test verify-wrap-pitch (blk offset size commands)
@@ -66,7 +75,7 @@
 
 (defun index-buffer? (buf &key (start 0) (end (buffer-size buf)) (shift 0))
   (loop for i from start below end
-     always (= (row-major-bref buf i) (+ i shift))))
+     always (= (row-major-bref buf i) (- i shift))))
 
 (def test test/cuda-driver/basic-buffer ()
   (with-fixture cuda-context
@@ -103,5 +112,31 @@
       (is (index-buffer? *cuda-arr1* :start 23))
       (is (buffer-filled? *cuda-arr1* 0.5 :start 2 :end 23)))))
 
-
+(def test test/cuda-driver/copy-buffer-buffer ()
+  (with-fixture cuda-context
+    (buffer-fill *cuda-arr1* 0)
+    (is (zero-buffer? *cuda-arr1*))
+    (copy-full-buffer *cuda-arr1* *cuda-arr2*)
+    (is (zero-buffer? *cuda-arr2*))
+    (copy-full-buffer *cuda-arr1* *cuda-arr3*)
+    (is (zero-buffer? *cuda-arr3*))
+    (copy-full-buffer *cuda-arr1* *cuda-arr4*)
+    (is (zero-buffer? *cuda-arr4*))
+    (set-index-buffer *cuda-arr4*)
+    (is (index-buffer? *cuda-arr4*))
+    (copy-full-buffer *cuda-arr4* *cuda-arr3*)
+    (is (index-buffer? *cuda-arr3*))
+    (copy-full-buffer *cuda-arr3* *cuda-arr2*)
+    (is (index-buffer? *cuda-arr2*))
+    (copy-full-buffer *cuda-arr2* *cuda-arr1*)
+    (is (index-buffer? *cuda-arr1*))
+    (copy-buffer-data *cuda-arr1* 1 *cuda-arr3* 4 3)
+    (is (index-buffer? *cuda-arr3* :start 4 :end 7 :shift 3))
+    (copy-buffer-data *cuda-arr2* 4 *cuda-arr1* 1 3)
+    (is (index-buffer? *cuda-arr1* :start 1 :end 4 :shift -3))
+    (is (equal (handler-case
+                   (copy-buffer-data *cuda-arr1* 0 *cuda-arr2* 1 6)
+                 (simple-warning (w)
+                   (format nil "~A" w)))
+               "Misaligned pitch copy, falling back to intermediate host array."))))
 
