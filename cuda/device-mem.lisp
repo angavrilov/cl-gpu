@@ -18,8 +18,11 @@
 
 (def class* cuda-mem-array ()
   ((blk :type cuda-linear)
-   (offset :type fixnum :initform 0)
-   (size :type fixnum)
+   (displaced-to :type (or cuda-mem-array null) :initform nil
+                 :documentation "CUDA array this one is displaced to")
+   (log-offset :type fixnum :initform 0 :documentation "Logical byte offset")
+   (phys-offset :type fixnum :initform 0 :documentation "Pitched byte offset")
+   (size :type fixnum :documentation "Array size in elements")
    (elt-type :type t)
    (elt-size :type fixnum)
    (dims :type (vector uint32))
@@ -69,6 +72,63 @@
               (format stream " (data inaccessible)"))
           (format stream " (DEAD)")))))
 
+(def method buffer-displace ((buffer cuda-mem-array) &key
+                             (offset 0 ofs-p)
+                             (byte-offset (if ofs-p (* offset (slot-value buffer 'elt-size)) 0))
+                             (element-type nil elt-type-p)
+                             (foreign-type (if elt-type-p
+                                               (lisp-to-foreign-elt-type element-type)
+                                               (slot-value buffer 'elt-type)))
+                             (size nil)
+                             (dimensions (or size (buffer-dimensions buffer))))
+  (with-slots (blk log-offset) buffer
+    (let* ((elt-size (foreign-type-size foreign-type))
+           (new-offset (+ log-offset byte-offset))
+           (phys-offset (cuda-linear-adjust-offset blk new-offset)))
+      (when (eql dimensions t)
+        (setf dimensions (floor (- (cuda-linear-size blk) new-offset) elt-size)))
+      (let* ((dims (ensure-list dimensions))
+             (rank (length dims))
+             (size (reduce #'* dims))
+             (byte-size (* size elt-size))
+             (width (cuda-linear-width blk))
+             (pitch-level (if (cuda-linear-pitched-p blk)
+                              (loop ; Find which of the dims fit in the pitch line
+                                 for rdims on dims
+                                 for i downfrom rank
+                                 for rsize = (reduce #'* rdims :initial-value elt-size)
+                                 if (<= rsize width)
+                                 do (progn
+                                      (unless (or (= i rank) (= rsize width))
+                                        (error "Inner dimensions ~S*~A = ~A don't match pitch width ~A"
+                                               rdims elt-size rsize width))
+                                      (return i))
+                                 finally (error "Inner dimension of ~S*~A doesn't fit in pitch width ~A"
+                                                dims elt-size width))
+                              rank)))
+        (when (cuda-linear-pitched-p blk)
+          (unless (or (= (mod new-offset width) 0)
+                      (<= (+ (mod new-offset width) byte-size) width))
+            (error "Byte offset ~A+~A not aligned to pitch width ~A"
+                   log-offset byte-offset width)))
+        (with-slots (size elt-type elt-size) buffer
+          (when (> (+ byte-offset byte-size) (* size elt-size))
+            (error "Specified dimensions ~A ~S exceed the original size ~A ~A"
+                   foreign-type dims size elt-type)))
+        ;; Everything seems OK, create the new descriptor
+        (make-instance 'cuda-mem-array :blk blk :size size
+                       :displaced-to buffer :log-offset new-offset :phys-offset phys-offset
+                       :elt-type foreign-type :elt-size elt-size
+                       :dims (to-uint32-vector dims)
+                       :strides (to-uint32-vector (compute-linear-strides blk dims elt-size pitch-level)))))))
+
+(def method buffer-displacement ((buffer cuda-mem-array))
+  (with-slots (displaced-to log-offset) buffer
+    (if displaced-to
+        (with-slots (elt-size (s-log-offset log-offset)) displaced-to
+          (values displaced-to (/ (- log-offset s-log-offset) elt-size)))
+        (values nil 0))))
+
 (def method bufferp ((buffer cuda-mem-array)) t)
 
 (def method ref-buffer ((buffer cuda-mem-array))
@@ -99,24 +159,24 @@
   (slot-value buffer 'size))
 
 (def method row-major-bref ((buffer cuda-mem-array) index)
-  (with-slots (blk size elt-type elt-size) buffer
+  (with-slots (blk log-offset size elt-type elt-size) buffer
     (unless (and (>= index 0) (< index size))
       (error "Linear index ~S is out of bounds for ~S" index buffer))
     (with-foreign-object (tmp elt-type)
-      (%cuda-linear-dh-transfer blk tmp (* index elt-size) elt-size t)
+      (%cuda-linear-dh-transfer blk tmp (+ (* index elt-size) log-offset) elt-size t)
       (mem-ref tmp elt-type))))
 
 (def method (setf row-major-bref) (value (buffer cuda-mem-array) index)
-  (with-slots (blk size elt-type elt-size) buffer
+  (with-slots (blk log-offset size elt-type elt-size) buffer
     (unless (and (>= index 0) (< index size))
       (error "Linear index ~S is out of bounds for ~S" index buffer))
     (with-foreign-object (tmp elt-type)
       (prog1
           (setf (mem-ref tmp elt-type) value)
-        (%cuda-linear-dh-transfer blk tmp (* index elt-size) elt-size nil)))))
+        (%cuda-linear-dh-transfer blk tmp (+ (* index elt-size) log-offset) elt-size nil)))))
 
 (def method buffer-fill ((buffer cuda-mem-array) value &key (start 0) end)
-  (with-slots (blk size elt-type elt-size) buffer
+  (with-slots (blk log-offset size elt-type elt-size) buffer
     (unless (and (>= start 0) (< start size)
                  (or (null end)
                      (and (>= end start) (<= end size))))
@@ -124,32 +184,35 @@
     (let ((count (- (or end size) start)))
       (if (eql value 0) ; Fill with 0 in binary mode, so that it
                         ; works with any type
-          (%cuda-linear-memset blk (* start elt-size) (* count elt-size) :uint8 0)
-          (%cuda-linear-memset blk start count elt-type value)))
+          (%cuda-linear-memset blk (* start elt-size) (* count elt-size) :uint8 0 :offset log-offset)
+          (%cuda-linear-memset blk start count elt-type value :offset log-offset)))
     buffer))
 
 (def method %copy-buffer-data ((src array) (dst cuda-mem-array) src-offset dst-offset count)
-  (with-slots (blk elt-type elt-size) dst
+  (with-slots (blk log-offset elt-type elt-size) dst
     (unless (equal (buffer-foreign-type src) elt-type)
       (error "Element type mismatch: ~S and ~S" src dst))
     (with-pointer-to-array (ptr src)
       (%cuda-linear-dh-transfer blk (inc-pointer ptr (* src-offset elt-size))
-                                (* dst-offset elt-size) (* count elt-size) nil))))
+                                (+ (* dst-offset elt-size) log-offset)
+                                (* count elt-size) nil))))
 
 (def method %copy-buffer-data ((src cuda-mem-array) (dst array) src-offset dst-offset count)
-  (with-slots (blk elt-type elt-size) src
+  (with-slots (blk log-offset elt-type elt-size) src
     (unless (equal elt-type (buffer-foreign-type dst))
       (error "Element type mismatch: ~S and ~S" src dst))
     (with-pointer-to-array (ptr dst)
       (%cuda-linear-dh-transfer blk (inc-pointer ptr (* dst-offset elt-size))
-                                (* src-offset elt-size) (* count elt-size) t))))
+                                (+ (* src-offset elt-size) log-offset)
+                                (* count elt-size) t))))
 
 (def method %copy-buffer-data ((src cuda-mem-array) (dst cuda-mem-array) src-offset dst-offset count)
-  (with-slots ((s-blk blk) (s-elt-type elt-type) elt-size) src
-    (with-slots ((d-blk blk) (d-elt-type elt-type)) dst
+  (with-slots ((s-blk blk) (s-log-offset log-offset) (s-elt-type elt-type) elt-size) src
+    (with-slots ((d-blk blk) (d-log-offset log-offset) (d-elt-type elt-type)) dst
       (unless (eql s-elt-type d-elt-type)
         (error "Element type mismatch: ~S and ~S" src dst))
-      (when (eql (%cuda-linear-dd-transfer s-blk (* src-offset elt-size) d-blk (* dst-offset elt-size)
+      (when (eql (%cuda-linear-dd-transfer s-blk (+ (* src-offset elt-size) s-log-offset)
+                                           d-blk (+ (* dst-offset elt-size) d-log-offset)
                                            (* count elt-size)
                                            :return-if-mismatch :misaligned)
                  :misaligned)

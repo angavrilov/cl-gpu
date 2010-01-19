@@ -140,3 +140,37 @@
                    (format nil "~A" w)))
                "Misaligned pitch copy, falling back to intermediate host array."))))
 
+(def test test/cuda-driver/displaced-buffer ()
+  (with-fixture cuda-context
+    (let* ((arr1 (buffer-displace *cuda-arr1* :offset 5 :dimensions '(2 5)))
+           (arr2 (buffer-displace *cuda-arr2* :offset 5 :dimensions '(2 5)))
+           (tmp (make-array '(5 5) :element-type 'single-float :initial-element 0.0))
+           (tmp1 (buffer-displace tmp :offset 5 :dimensions '(2 5))))
+      (set-index-buffer *cuda-arr1*)
+      (is (index-buffer? arr1 :shift -5)) ; displaced read
+      (buffer-fill arr1 0.0) ; displaced fill
+      (is (index-buffer? *cuda-arr1* :start 0 :end 5))
+      (is (buffer-filled? *cuda-arr1* 0.0 :start 5 :end 15))
+      (is (index-buffer? *cuda-arr1* :start 15))
+      (set-index-buffer arr1) ; displaced write
+      (is (index-buffer? *cuda-arr1* :start 5 :end 15 :shift 5))
+      (set-index-buffer *cuda-arr2*)
+      (buffer-fill *cuda-arr1* 0.0)
+      (copy-full-buffer arr2 arr1) ; displaced dev -> dev
+      (is (buffer-filled? *cuda-arr1* 0.0 :start 0 :end 5))
+      (is (index-buffer? *cuda-arr1* :start 5 :end 15))
+      (is (buffer-filled? *cuda-arr1* 0.0 :start 15))
+      (buffer-fill arr1 0.0)
+      (is (zero-buffer? *cuda-arr1*))
+      (set-index-buffer tmp)
+      (copy-full-buffer tmp1 arr1) ; displaced host -> dev
+      (is (buffer-filled? *cuda-arr1* 0.0 :start 0 :end 5))
+      (is (index-buffer? *cuda-arr1* :start 5 :end 15))
+      (is (buffer-filled? *cuda-arr1* 0.0 :start 15))
+      (buffer-fill tmp 0.0)
+      (is (zero-buffer? tmp))
+      (copy-full-buffer arr1 tmp1) ; displaced dev -> host
+      (is (buffer-filled? tmp 0.0 :start 0 :end 5))
+      (is (index-buffer? tmp :start 5 :end 15))
+      (is (buffer-filled? tmp 0.0 :start 15)))))
+

@@ -22,6 +22,35 @@
   (:documentation "Decrease the reference count on the buffer.")
   (:method ((buffer t)) t))
 
+(def (generic e) buffer-displace (buffer &key
+                                         offset byte-offset ; Offset in elements of the original
+                                         element-type foreign-type ; May not always be supported
+                                         size dimensions) ; Size is a shortcut for one dimension
+  (:documentation "Returns a buffer displaced to the current one. The reference count is shared and unchanged.")
+  (:method ((buffer array) &key
+            (byte-offset 0 b-ofs-p)
+            (offset (if b-ofs-p
+                        (/ byte-offset (foreign-type-size (buffer-foreign-type buffer)))
+                        0))
+            (foreign-type nil f-type-p)
+            (element-type (if f-type-p
+                              (foreign-to-lisp-elt-type foreign-type)
+                              (array-element-type buffer)))
+            (size nil)
+            (dimensions (or size (array-dimensions buffer))))
+    (if (eql dimensions t)
+        (setf dimensions (- (array-total-size buffer) offset)))
+    (unless (equal (array-element-type buffer)
+                   (upgraded-array-element-type element-type))
+      (error "Cannot change the element type of an array: ~S -> ~S"
+             (array-element-type buffer) element-type))
+    (make-array dimensions :element-type element-type :displaced-to buffer :displaced-index-offset offset)))
+
+(def (generic e) buffer-displacement (buffer)
+  (:documentation "Returns information about this buffer's displacement.")
+  (:method ((buffer array))
+    (array-displacement buffer)))
+
 (def (generic e) buffer-as-array (buffer)
   (:documentation "Returns the buffer converted to an array.")
   (:method ((buffer array))

@@ -562,7 +562,7 @@
       (declare (dynamic-extent #'transfer-chunk #'transfer-rows))
       (%cuda-linear-wrap-pitch blk offset size #'transfer-chunk #'transfer-rows))))
 
-(def function %cuda-linear-memset (blk index count type value)
+(def function %cuda-linear-memset (blk index count type value &key (offset 0))
   "Fills the linear block region with the same value."
   (multiple-value-bind (elt-size ivalue)
       (with-foreign-object (ptmp type)
@@ -591,7 +591,7 @@
                    (2 (cuda-invoke cuMemsetD2D16 dev-ptr pitch ivalue (ash width -1) row-count))
                    (4 (cuda-invoke cuMemsetD2D32 dev-ptr pitch ivalue (ash width -2) row-count))))))
         (declare (dynamic-extent #'fill-chunk #'fill-rows))
-        (%cuda-linear-wrap-pitch blk (* index elt-size) (* count elt-size) #'fill-chunk #'fill-rows)))))
+        (%cuda-linear-wrap-pitch blk (+ (* index elt-size) offset) (* count elt-size) #'fill-chunk #'fill-rows)))))
 
 (def function %cuda-linear-dd-transfer-unpitched (p-blk p-offset up-blk up-offset size to-unpitched-p)
   "Moves data between a contiguous device memory area and possibly pitched linear block."
