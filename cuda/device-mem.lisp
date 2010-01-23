@@ -121,7 +121,9 @@
 (def method buffer-refcnt ((buffer cuda-mem-array))
   (with-slots (blk) buffer
     (if (cuda-linear-valid-p blk)
-        (cuda-linear-refcnt blk)
+        (if (cuda-linear-module blk)
+            t ; Module-backed blocks cannot be deallocated
+            (cuda-linear-refcnt blk))
         nil)))
 
 (def method ref-buffer ((buffer cuda-mem-array))

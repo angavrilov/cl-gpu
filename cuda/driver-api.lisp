@@ -202,20 +202,36 @@
   (ctx cuda-context-handle))
 
 (defstruct cuda-context
+  "CUDA Context handle wrapper"
   (device nil :read-only t)
   (handle nil)
   (thread nil)
-  (blocks nil))
+  (blocks nil)
+  (modules nil))
+
+(defstruct cuda-module
+  "CUDA Module handle wrapper"
+  (handle nil)
+  (context nil :type cuda-context :read-only t)
+  (source nil)
+  (vars nil)
+  (texrefs nil)
+  (kernels nil))
 
 (defstruct cuda-linear
+  "CUDA linear block wrapper"
   (refcnt 1 :type fixnum)
   (context nil :type cuda-context :read-only t)
+  ;; If the block represents a static variable:
+  (module nil :type (or cuda-module null) :read-only t)
   (size 0 :type fixnum :read-only t)
   (extent 0 :type fixnum :read-only t)
   (width 0 :type fixnum :read-only t)
   (height 0 :type fixnum :read-only t)
   (pitch 0 :type fixnum :read-only t)
-  (handle nil))
+  (pitch-elt 0 :type fixnum :read-only t)
+  (handle nil)
+  (recover-cb nil))
 
 (defmethod print-object ((object cuda-context) stream)
   (print-unreadable-object (object stream :identity t)
@@ -288,9 +304,11 @@
     (setf (cuda-context-thread context) nil)
     (deletef *cuda-context-list* context)
     (deletef (gethash (current-thread) *cuda-thread-contexts*) context)
-    ;; Wipe the blocks
+    ;; Wipe the memory handles
     (dolist (blk (cuda-context-blocks context))
       (setf (cuda-linear-handle blk) nil))
+    (dolist (module (cuda-context-modules context))
+      (%cuda-module-invalidate module))
     nil))
 
 ;;; Linear memory
@@ -366,7 +384,7 @@
   (height :unsigned-int))
 
 ;; 2d copy
-(defctype cuda-array :pointer)
+(defctype cuda-array-handle :pointer)
 
 (defcenum cuda-memory-type
   (:host 1)
@@ -380,7 +398,7 @@
   (src-type    cuda-memory-type)
   (src-host    :pointer)
   (src-device  cuda-device-ptr)
-  (src-array   cuda-array)
+  (src-array   cuda-array-handle)
   (src-pitch   :unsigned-int)
   ;; Destination
   (dst-x-bytes :unsigned-int)
@@ -388,7 +406,7 @@
   (dst-type    cuda-memory-type)
   (dst-host    :pointer)
   (dst-device  cuda-device-ptr)
-  (dst-array   cuda-array)
+  (dst-array   cuda-array-handle)
   (dst-pitch   :unsigned-int)
   ;; General
   (width-bytes :unsigned-int)
@@ -426,7 +444,9 @@
   (print-unreadable-object (object stream :identity t)
     (format stream "CUDA Block ~AKb &~A "
             (ceiling (cuda-linear-extent object) 1024)
-            (cuda-linear-refcnt object))
+            (if (cuda-linear-module object)
+                T
+                (cuda-linear-refcnt object)))
     (if (cuda-linear-pitched-p object)
         (format stream "~A+~Ax~A" (cuda-linear-width object)
                 (- (cuda-linear-pitch object) (cuda-linear-width object))
@@ -457,6 +477,7 @@
         (setf pitch size width size height 1))
       (let ((blk (make-cuda-linear :context context :handle handle
                                    :size size :extent (* height pitch)
+                                   :pitch-elt (or pitch-for 0)
                                    :width width :height height :pitch pitch)))
         (push blk (cuda-context-blocks context))
         blk))))
@@ -464,6 +485,8 @@
 (def function cuda-free-linear (blk)
   (if (cuda-linear-handle blk)
       (let ((context (cuda-linear-context blk)))
+        (when (cuda-linear-module blk)
+          (error "Cannot deallocate blocks that belong to modules."))
         (with-cuda-context (context)
           (cuda-invoke cuMemFree (cuda-linear-handle blk))
           (setf (cuda-linear-handle blk) nil)
@@ -703,3 +726,117 @@
                                (or return-if-mismatch
                                    (error "Pitch alignment mismatch: ~S ~A -> ~S ~A ~A"
                                           src-blk src-offset dst-blk dst-offset size))))))))))))))
+
+;;; CUDA Modules
+
+(defctype cuda-module-handle :pointer)
+(defctype cuda-kernel-handle :pointer)
+
+(defcfun "cuModuleGetGlobal" cuda-error
+  (pptr (:pointer cuda-device-ptr))
+  (psize (:pointer :unsigned-int))
+  (module cuda-module-handle)
+  (name :string))
+
+(defcfun "cuModuleGetFunction" cuda-error
+  (pfun (:pointer cuda-kernel-handle))
+  (module cuda-module-handle)
+  (name :string))
+
+(defcfun "cuModuleUnload" cuda-error
+  (module cuda-module-handle))
+
+(defcenum cuda-jit-option
+  (:max-registers 0)
+  :threads-per-block :wall-time
+  :info-log-buffer :info-log-buffer-size-bytes
+  :error-log-buffer :error-log-buffer-size-bytes
+  :optimization-level :target-from-cucontext :target
+  :fallback-strategy)
+
+(defcfun "cuModuleLoadDataEx" cuda-error
+  (pmodule  (:pointer cuda-module-handle))
+  (pimage   :pointer)
+  (num-opts :unsigned-int)
+  (options  (:pointer cuda-jit-option))
+  (values   :pointer))
+
+
+(def function cuda-module-ensure-handle (module)
+  (or (cuda-module-handle module)
+      (error "Module has already been unloaded: ~S" module)))
+
+(def function cuda-module-valid-p (module)
+  (and (cuda-module-p module)
+       (not (null (cuda-module-handle module)))))
+
+(defmethod print-object ((object cuda-module) stream)
+  (print-unreadable-object (object stream :identity t)
+    (format stream "CUDA Module: ~S ~S"
+            (mapcar #'car (cuda-module-vars object))
+            (mapcar #'car (cuda-module-kernels object)))
+    (unless (cuda-module-handle object)
+      (format stream " (DEAD)"))))
+
+(def function %cuda-module-invalidate (module)
+  (setf (cuda-module-handle module) nil)
+  (dolist (var (cuda-module-vars module))
+    (setf (cuda-linear-handle (cdr var)) nil)))
+
+(def function cuda-load-module-pointer (source image-ptr &key max-registers threads-per-block optimization-level)
+  (assert (cuda-valid-context-p (cuda-current-context)))
+  (with-foreign-objects ((popts 'cuda-jit-option 3)
+                         (pvalues :pointer 3)
+                         (pmax :int) (pthreads :int) (poptlev :int)
+                         (pmodule 'cuda-module-handle))
+    (let ((context (cuda-current-context))
+          (opt-cnt 0))
+      (flet ((add-option (code type ptr value)
+               (setf (mem-ref ptr type) value
+                     (mem-aref pvalues :pointer opt-cnt) ptr
+                     (mem-aref popts 'cuda-jit-option opt-cnt) code
+                     opt-cnt (1+ opt-cnt))))
+        (when max-registers
+          (add-option :max-registers :int pmax max-registers))
+        (when threads-per-block
+          (add-option :threads-per-block :int pthreads threads-per-block))
+        (when optimization-level
+          (add-option :optimization-level :int poptlev optimization-level)))
+      (cuda-invoke cuModuleLoadDataEx pmodule image-ptr opt-cnt popts pvalues)
+      (aprog1 (make-cuda-module :handle (mem-ref pmodule 'cuda-module-handle)
+                                :context context :source source)
+        (push it (cuda-context-modules context))))))
+
+(def function cuda-load-module (source &rest args)
+  (etypecase source
+    (string (with-foreign-string (ptr source)
+              (apply #'cuda-load-module-pointer source ptr args)))
+    (array (with-pointer-to-array (ptr source)
+             (apply #'cuda-load-module-pointer source ptr args)))))
+
+(def function cuda-unload-module (module)
+  (if (cuda-module-handle module)
+      (let ((context (cuda-module-context module)))
+        (with-cuda-context (context)
+          (cuda-invoke cuModuleUnload (cuda-module-handle module))
+          (%cuda-module-invalidate module)
+          (deletef (cuda-context-modules context) module)
+          nil))
+      (cerror "ignore" "CUDA module already destroyed.")))
+
+(def function cuda-module-get-var (module name)
+  "Returns a linear block that describes a module-global variable."
+  (or (cdr (assoc name (cuda-module-vars module)
+                  :test #'string-equal))
+      (with-cuda-context ((cuda-module-context module))
+        (let ((handle (cuda-module-ensure-handle module)))
+          (with-foreign-objects ((paddr 'cuda-device-ptr)
+                                 (psize :unsigned-int))
+            (cuda-invoke cuModuleGetGlobal paddr psize handle name)
+            (let* ((size (mem-ref psize :unsigned-int))
+                   (blk (make-cuda-linear :context *cuda-context* :module module
+                                          :size size :extent size
+                                          :width size :pitch size :height 1
+                                          :handle (mem-ref paddr 'cuda-device-ptr))))
+              (push (cons name blk) (cuda-module-vars module))
+              (values blk)))))))
