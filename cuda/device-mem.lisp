@@ -181,28 +181,22 @@
     buffer))
 
 (def method %copy-buffer-data ((src array) (dst cuda-mem-array) src-offset dst-offset count)
-  (with-slots (blk log-offset elt-type elt-size) dst
-    (unless (equal (buffer-foreign-type src) elt-type)
-      (error "Element type mismatch: ~S and ~S" src dst))
+  (with-slots (blk log-offset elt-size) dst
     (with-pointer-to-array (ptr src)
       (%cuda-linear-dh-transfer blk (inc-pointer ptr (* src-offset elt-size))
                                 (+ (* dst-offset elt-size) log-offset)
                                 (* count elt-size) nil))))
 
 (def method %copy-buffer-data ((src cuda-mem-array) (dst array) src-offset dst-offset count)
-  (with-slots (blk log-offset elt-type elt-size) src
-    (unless (equal elt-type (buffer-foreign-type dst))
-      (error "Element type mismatch: ~S and ~S" src dst))
+  (with-slots (blk log-offset elt-size) src
     (with-pointer-to-array (ptr dst)
       (%cuda-linear-dh-transfer blk (inc-pointer ptr (* dst-offset elt-size))
                                 (+ (* src-offset elt-size) log-offset)
                                 (* count elt-size) t))))
 
 (def method %copy-buffer-data ((src cuda-mem-array) (dst cuda-mem-array) src-offset dst-offset count)
-  (with-slots ((s-blk blk) (s-log-offset log-offset) (s-elt-type elt-type) elt-size) src
-    (with-slots ((d-blk blk) (d-log-offset log-offset) (d-elt-type elt-type)) dst
-      (unless (eql s-elt-type d-elt-type)
-        (error "Element type mismatch: ~S and ~S" src dst))
+  (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
+    (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
       (when (eql (%cuda-linear-dd-transfer s-blk (+ (* src-offset elt-size) s-log-offset)
                                            d-blk (+ (* dst-offset elt-size) d-log-offset)
                                            (* count elt-size)
@@ -211,3 +205,20 @@
         (warn "Misaligned pitch copy, falling back to intermediate host array.")
         (call-next-method)))))
 
+(def method %copy-buffer-data ((src foreign-array) (dst cuda-mem-array) src-offset dst-offset count)
+  (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
+    (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
+      (%cuda-linear-dh-transfer d-blk
+                                (inc-pointer (foreign-block-ptr s-blk)
+                                             (+ (* src-offset elt-size) s-log-offset))
+                                (+ (* dst-offset elt-size) d-log-offset)
+                                (* count elt-size) nil))))
+
+(def method %copy-buffer-data ((src cuda-mem-array) (dst foreign-array) src-offset dst-offset count)
+  (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
+    (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
+      (%cuda-linear-dh-transfer s-blk
+                                (inc-pointer (foreign-block-ptr d-blk)
+                                             (+ (* dst-offset elt-size) d-log-offset))
+                                (+ (* src-offset elt-size) s-log-offset)
+                                (* count elt-size) t))))

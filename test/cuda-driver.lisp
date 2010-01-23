@@ -61,116 +61,15 @@
                            (:rows 4 20 64 1 2)
                            (:chunk 192 44 12))))))
 
-(defun zero-buffer? (buf)
-  (loop for i from 0 below (buffer-size buf)
-     always (= (row-major-bref buf i) 0)))
-
-(defun buffer-filled? (buf value &key (start 0) (end (buffer-size buf)))
-  (loop for i from start below end
-     always (= (row-major-bref buf i) value)))
-
-(defun set-index-buffer (buf)
-  (loop for i from 0 below (buffer-size buf)
-     do (setf (row-major-bref buf i) (float i))))
-
-(defun index-buffer? (buf &key (start 0) (end (buffer-size buf)) (shift 0))
-  (loop for i from start below end
-     always (= (row-major-bref buf i) (- i shift))))
-
-(def test test/cuda-driver/basic-buffer ()
+(def test test/cuda-driver/cuda-linear-buffer ()
   (with-fixture cuda-context
-    (is (= (buffer-rank *cuda-arr1*) 2))
-    (is (equal (buffer-dimensions *cuda-arr1*) '(5 5)))
-    (is (= (buffer-size *cuda-arr1*) 25))
-    (is (eql (buffer-foreign-type *cuda-arr1*) :float))
-    (is (eql (buffer-element-type *cuda-arr1*) 'single-float))
-    (is (eq (buffer-fill *cuda-arr1* 0) *cuda-arr1*))
-    (is (zero-buffer? *cuda-arr1*))
-    (set-index-buffer *cuda-arr1*)
-    (is (index-buffer? *cuda-arr1*))
-    (is (equal (loop for i from 0 below 5
-                  collect (bref *cuda-arr1* 1 i))
-               (loop for i from 0 below 5 collect (float (+ i 5)))))
-    (buffer-fill *cuda-arr1* 0.5 :start 2 :end 23)
-    (is (index-buffer? *cuda-arr1* :start 0 :end 2))
-    (is (index-buffer? *cuda-arr1* :start 23))
-    (is (buffer-filled? *cuda-arr1* 0.5 :start 2 :end 23))))
-
-(def test test/cuda-driver/copy-array-buffer ()
-  (with-fixture cuda-context
-    (let ((arr1 (make-array '(5 5) :element-type 'single-float))
-          (arr2 (make-array 25 :element-type 'single-float :initial-element 1.0)))
-      (buffer-fill *cuda-arr1* 0)
-      (copy-full-buffer *cuda-arr1* arr2)
-      (is (zero-buffer? arr2))
-      (set-index-buffer arr1)
-      (copy-full-buffer arr1 *cuda-arr1*)
-      (is (index-buffer? *cuda-arr1*))
-      (buffer-fill arr2 0.5)
-      (copy-buffer-data arr2 2 *cuda-arr1* 2 (- 23 2))
-      (is (index-buffer? *cuda-arr1* :start 0 :end 2))
-      (is (index-buffer? *cuda-arr1* :start 23))
-      (is (buffer-filled? *cuda-arr1* 0.5 :start 2 :end 23)))))
-
-(def test test/cuda-driver/copy-buffer-buffer ()
-  (with-fixture cuda-context
-    (buffer-fill *cuda-arr1* 0)
-    (is (zero-buffer? *cuda-arr1*))
-    (copy-full-buffer *cuda-arr1* *cuda-arr2*)
-    (is (zero-buffer? *cuda-arr2*))
-    (copy-full-buffer *cuda-arr1* *cuda-arr3*)
-    (is (zero-buffer? *cuda-arr3*))
-    (copy-full-buffer *cuda-arr1* *cuda-arr4*)
-    (is (zero-buffer? *cuda-arr4*))
-    (set-index-buffer *cuda-arr4*)
-    (is (index-buffer? *cuda-arr4*))
-    (copy-full-buffer *cuda-arr4* *cuda-arr3*)
-    (is (index-buffer? *cuda-arr3*))
-    (copy-full-buffer *cuda-arr3* *cuda-arr2*)
-    (is (index-buffer? *cuda-arr2*))
-    (copy-full-buffer *cuda-arr2* *cuda-arr1*)
-    (is (index-buffer? *cuda-arr1*))
-    (copy-buffer-data *cuda-arr1* 1 *cuda-arr3* 4 3)
-    (is (index-buffer? *cuda-arr3* :start 4 :end 7 :shift 3))
-    (copy-buffer-data *cuda-arr2* 4 *cuda-arr1* 1 3)
-    (is (index-buffer? *cuda-arr1* :start 1 :end 4 :shift -3))
+    (test/buffers/all *cuda-arr1* *cuda-arr2* *cuda-arr3* *cuda-arr4*)
     (is (equal (handler-case
                    (copy-buffer-data *cuda-arr1* 0 *cuda-arr2* 1 6)
                  (simple-warning (w)
                    (format nil "~A" w)))
                "Misaligned pitch copy, falling back to intermediate host array."))))
 
-(def test test/cuda-driver/displaced-buffer ()
-  (with-fixture cuda-context
-    (let* ((arr1 (buffer-displace *cuda-arr1* :offset 5 :dimensions '(2 5)))
-           (arr2 (buffer-displace *cuda-arr2* :offset 5 :dimensions '(2 5)))
-           (tmp (make-array '(5 5) :element-type 'single-float :initial-element 0.0))
-           (tmp1 (buffer-displace tmp :offset 5 :dimensions '(2 5))))
-      (set-index-buffer *cuda-arr1*)
-      (is (index-buffer? arr1 :shift -5)) ; displaced read
-      (buffer-fill arr1 0.0) ; displaced fill
-      (is (index-buffer? *cuda-arr1* :start 0 :end 5))
-      (is (buffer-filled? *cuda-arr1* 0.0 :start 5 :end 15))
-      (is (index-buffer? *cuda-arr1* :start 15))
-      (set-index-buffer arr1) ; displaced write
-      (is (index-buffer? *cuda-arr1* :start 5 :end 15 :shift 5))
-      (set-index-buffer *cuda-arr2*)
-      (buffer-fill *cuda-arr1* 0.0)
-      (copy-full-buffer arr2 arr1) ; displaced dev -> dev
-      (is (buffer-filled? *cuda-arr1* 0.0 :start 0 :end 5))
-      (is (index-buffer? *cuda-arr1* :start 5 :end 15))
-      (is (buffer-filled? *cuda-arr1* 0.0 :start 15))
-      (buffer-fill arr1 0.0)
-      (is (zero-buffer? *cuda-arr1*))
-      (set-index-buffer tmp)
-      (copy-full-buffer tmp1 arr1) ; displaced host -> dev
-      (is (buffer-filled? *cuda-arr1* 0.0 :start 0 :end 5))
-      (is (index-buffer? *cuda-arr1* :start 5 :end 15))
-      (is (buffer-filled? *cuda-arr1* 0.0 :start 15))
-      (buffer-fill tmp 0.0)
-      (is (zero-buffer? tmp))
-      (copy-full-buffer arr1 tmp1) ; displaced dev -> host
-      (is (buffer-filled? tmp 0.0 :start 0 :end 5))
-      (is (index-buffer? tmp :start 5 :end 15))
-      (is (buffer-filled? tmp 0.0 :start 15)))))
-
+(def test test/cuda-driver/cuda-linear-foreign-copy ()
+  (with-fixtures (cuda-context foreign-arrs)
+    (test/buffers/copy *cuda-arr1* *foreign-arr2* *cuda-arr3* *foreign-arr4*)))

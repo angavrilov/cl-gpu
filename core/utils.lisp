@@ -13,6 +13,11 @@
                  namelist)
      ,@code))
 
+(defun remove-keys (list &rest keys)
+  (loop for (key value) on list by #'cddr
+     unless (member key keys)
+     collect key and collect value))
+
 #+ccl
 (def function double-offset-fixup (ivector)
   (case (ccl::typecode ivector)

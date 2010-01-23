@@ -22,7 +22,8 @@
                 :components ((:file "package")
                              (:file "typedefs" :depends-on ("package"))
                              (:file "utils" :depends-on ("package"))
-                             (:file "buffers" :depends-on ("typedefs" "utils"))))
+                             (:file "buffers" :depends-on ("typedefs" "utils"))
+                             (:file "foreign-buf" :depends-on ("buffers"))))
                (:module "cuda"
                 :depends-on ("core")
                 :components (#+cuda (:file "driver-api")

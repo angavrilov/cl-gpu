@@ -166,7 +166,7 @@
     buffer))
 
 (def (generic e) %copy-buffer-data (src dst src-offset dst-offset count)
-  (:documentation "Copies a subset of elements from src to dst. Counts and offsets must be correct.")
+  (:documentation "Copies a subset of elements from src to dst. Counts, offsets and types must be correct.")
   (:method ((src array) (dst array) src-offset dst-offset count)
     (copy-array-data src src-offset dst dst-offset count))
   (:method ((src t) (dst t) src-offset dst-offset count)
@@ -199,12 +199,21 @@
               (format stream " (data inaccessible)"))
           (format stream " (DEAD)")))))
 
+(def function check-buffer-same-type (src dst)
+  (unless
+      (if (or (eql (bufferp src) :foreign)
+              (eql (bufferp dst) :foreign))
+          (equal (buffer-foreign-type src) (buffer-foreign-type dst))
+          (equal (buffer-element-type src) (buffer-element-type dst)))
+    (error "Element type mismatch: ~S and ~S" src dst)))
+
 (def (function e) copy-buffer-data (src src-offset dest dest-offset count)
   "Copies a subset of elements from src to dst. A safe wrapper around %copy-buffer-data."
   (let* ((src-size (buffer-size src))
          (dest-size (buffer-size dest))
          (rcount (adjust-copy-count src-size src-offset dest-size dest-offset count)))
     (when (> rcount 0)
+      (check-buffer-same-type src dest)
       (%copy-buffer-data src dest src-offset dest-offset rcount))))
 
 (def (function e) copy-full-buffer (src dest)
@@ -213,4 +222,5 @@
     (let ((src-size (buffer-size src))
           (dest-size (buffer-size dest)))
       (assert (= src-size dest-size))
+      (check-buffer-same-type src dest)
       (%copy-buffer-data src dest 0 0 src-size))))
