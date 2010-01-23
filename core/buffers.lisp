@@ -7,20 +7,36 @@
 (in-package :cl-gpu)
 
 (def (generic e) bufferp (buffer)
-  (:documentation "Determines if the argument is a buffer")
-  (:method ((buffer array)) t))
+  (:documentation "Determines if the argument is a buffer. Returns :foreign if based on foreign types.")
+  (:method ((buffer array)) :lisp))
 
 (deftype buffer ()
   "A buffer is an arrayish object; includes normal arrays."
   '(satisfies bufferp))
 
+(def (generic e) buffer-refcnt (buffer)
+  (:documentation "Returns the reference count of the buffer, t if not counted, or nil if invalid.")
+  (:method ((buffer array)) t))
+
 (def (generic e) ref-buffer (buffer)
-  (:documentation "Increase the reference count on the buffer.")
-  (:method ((buffer t)) nil))
+  (:documentation "Increase the reference count on the buffer. Returns the buffer.")
+  (:method ((buffer t)) buffer)
+  (:method :around ((buffer t))
+    (let ((cnt (buffer-refcnt buffer)))
+      (when (and (numberp cnt) (> cnt 0))
+        (call-next-method))
+      buffer)))
 
 (def (generic e) deref-buffer (buffer)
-  (:documentation "Decrease the reference count on the buffer.")
-  (:method ((buffer t)) t))
+  (:documentation "Decrease the reference count on the buffer. Returns post-value of buffer-refcnt.")
+  (:method ((buffer t)) t)
+  (:method :around ((buffer t))
+    (let ((cnt (buffer-refcnt buffer)))
+      (if (and (numberp cnt) (> cnt 0))
+          (progn
+            (call-next-method)
+            (if (> cnt 1) (1- cnt) nil))
+          cnt))))
 
 (def (generic e) buffer-displace (buffer &key
                                          offset byte-offset ; Offset in elements of the original
@@ -162,6 +178,26 @@
            (let ((tmp (make-array count :element-type (buffer-element-type src))))
              (%copy-buffer-data src tmp src-offset 0 count)
              (%copy-buffer-data tmp dst 0 dst-offset count))))))
+
+(def function print-buffer (name obj stream)
+  (print-unreadable-object (obj stream)
+    (let ((refcnt (buffer-refcnt obj))
+          (pcnt (or *print-length* 10))
+          (size (buffer-size obj)))
+      (format stream "~A &~A ~S ~A" name (or refcnt 0)
+              (buffer-dimensions obj)
+              (if (eql (bufferp obj) :foreign)
+                  (buffer-foreign-type obj)
+                  (buffer-element-type obj)))
+      (if refcnt
+          (or (ignore-errors
+                (format stream ":~{ ~A~}~:[~;...~]"
+                        (loop for i from 0 below (min size pcnt)
+                           collect (row-major-bref obj i))
+                        (> size pcnt))
+                t)
+              (format stream " (data inaccessible)"))
+          (format stream " (DEAD)")))))
 
 (def (function e) copy-buffer-data (src src-offset dest dest-offset count)
   "Copies a subset of elements from src to dst. A safe wrapper around %copy-buffer-data."

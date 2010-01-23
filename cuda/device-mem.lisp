@@ -29,6 +29,9 @@
    (strides :type (vector uint32)))
   (:automatic-accessors-p nil))
 
+(def method print-object ((obj cuda-mem-array) stream)
+  (print-buffer "CUDA Array" obj stream))
+
 (def (function e) cuda-make-array (dims &key (element-type 'single-float)
                                         (foreign-type (lisp-to-foreign-elt-type element-type) ft-p)
                                         pitch-elt-size (pitch-level 1)
@@ -55,22 +58,6 @@
       (if initial-element
           (buffer-fill buffer initial-element)
           buffer))))
-
-(def method print-object ((obj cuda-mem-array) stream)
-  (with-slots (blk dims elt-type size) obj
-    (print-unreadable-object (obj stream)
-      (format stream "CUDA Array &~A ~S ~A" (cuda-linear-refcnt blk)
-              (coerce dims 'list) elt-type)
-      (if (cuda-linear-valid-p blk)
-          (or (ignore-errors
-                (with-cuda-context ((cuda-linear-context blk))
-                  (format stream ":~{ ~A~}~:[~;...~]"
-                          (loop for i from 0 below (min size (or *print-length* 10))
-                             collect (row-major-bref obj i))
-                          (> size 10)))
-                t)
-              (format stream " (data inaccessible)"))
-          (format stream " (DEAD)")))))
 
 (def method buffer-displace ((buffer cuda-mem-array) &key
                              (offset 0 ofs-p)
@@ -129,19 +116,22 @@
           (values displaced-to (/ (- log-offset s-log-offset) elt-size)))
         (values nil 0))))
 
-(def method bufferp ((buffer cuda-mem-array)) t)
+(def method bufferp ((buffer cuda-mem-array)) :foreign)
+
+(def method buffer-refcnt ((buffer cuda-mem-array))
+  (with-slots (blk) buffer
+    (if (cuda-linear-valid-p blk)
+        (cuda-linear-refcnt blk)
+        nil)))
 
 (def method ref-buffer ((buffer cuda-mem-array))
   (with-slots (blk) buffer
-    (when (> (cuda-linear-refcnt blk) 0)
-      (incf (cuda-linear-refcnt blk)))))
+    (incf (cuda-linear-refcnt blk))))
 
 (def method deref-buffer ((buffer cuda-mem-array))
   (with-slots (blk) buffer
-    (when (> (cuda-linear-refcnt blk) 0)
-      (let ((live (> (decf (cuda-linear-refcnt blk)) 0)))
-        (unless live (cuda-free-linear blk))
-        live))))
+    (unless (> (decf (cuda-linear-refcnt blk)) 0)
+      (cuda-free-linear blk))))
 
 (def method buffer-foreign-type ((buffer cuda-mem-array))
   (slot-value buffer 'elt-type))
