@@ -21,7 +21,7 @@
   :components ((:module "core"
                 :components ((:file "package")
                              (:file "typedefs" :depends-on ("package"))
-                             (:file "utils" :depends-on ("package"))
+                             (:file "utils" :depends-on ("typedefs"))
                              (:file "buffers" :depends-on ("typedefs" "utils"))
                              (:file "foreign-buf" :depends-on ("buffers"))))
                (:module "cuda"

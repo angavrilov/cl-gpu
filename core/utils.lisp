@@ -78,14 +78,32 @@
   #-(or ecl ccl) (error "Not implemented"))
 
 (def function array-type-tag (array)
-  (ecase (array-element-type array)
-    (single-float #x46525241)
-    (double-float #x44525241)))
+  (ecase (lisp-to-foreign-elt-type
+          (array-element-type array))
+    (:float #x46525241)
+    (:double #x44525241)
+    (:int8 #x62525241)
+    (:uint8 #x42525241)
+    (:int16 #x73525241)
+    (:uint16 #x53525241)
+    (:int32 #x69525241)
+    (:uint32 #x49525241)
+    (:int64 #x71525241)
+    (:uint64 #x51525241)))
 
 (def function array-type-by-tag (tag)
-  (ecase tag
-    (#x46525241 'single-float)
-    (#x44525241 'double-float)))
+  (foreign-to-lisp-elt-type
+   (ecase tag
+     (#x46525241 :float)
+     (#x44525241 :double)
+     (#x62525241 :int8)
+     (#x42525241 :uint8)
+     (#x73525241 :int16)
+     (#x53525241 :uint16)
+     (#x69525241 :int32)
+     (#x49525241 :uint32)
+     (#x71525241 :int64)
+     (#x51525241 :uint64))))
 
 (def (function e) write-array (array stream)
   "Store the array to a binary stream with meta-data."

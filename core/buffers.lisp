@@ -67,15 +67,17 @@
   (:method ((buffer array))
     (array-displacement buffer)))
 
-(def (generic e) buffer-as-array (buffer)
+(def (generic e) buffer-as-array (buffer &key no-copy)
   (:documentation "Returns the buffer converted to an array.")
-  (:method ((buffer array))
+  (:method ((buffer array) &key no-copy)
+    (declare (ignore no-copy))
     ;; Second value: shared flag, i.e. it is the buffer.
     (values buffer t))
-  (:method ((buffer t))
+  (:method ((buffer t) &key no-copy)
     (let ((array (make-array (buffer-dimensions buffer)
                              :element-type (buffer-element-type buffer))))
-      (copy-full-buffer buffer array)
+      (unless no-copy
+        (copy-full-buffer buffer array))
       (values array nil))))
 
 (def (generic e) buffer-element-type (buffer)
@@ -224,3 +226,13 @@
       (assert (= src-size dest-size))
       (check-buffer-same-type src dest)
       (%copy-buffer-data src dest 0 0 src-size))))
+
+(def (function e) write-buffer (buffer stream)
+  (write-array (buffer-as-array buffer) stream))
+
+(def (function e) read-buffer (buffer stream)
+  (multiple-value-bind (array samep)
+      (buffer-as-array buffer :no-copy t)
+    (read-array array stream)
+    (unless samep
+      (copy-full-buffer array buffer))))
