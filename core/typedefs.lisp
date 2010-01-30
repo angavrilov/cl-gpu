@@ -16,14 +16,19 @@
 (deftype int32 () '(signed-byte 32))
 (deftype int64 () '(signed-byte 64))
 
+(def macro gethash-with-init (key table init-expr)
+  "Looks up the key in the table. When not found, lazily initializes with init-expr."
+  (with-unique-names (item found)
+    (once-only (key table)
+      `(multiple-value-bind (,item ,found) (gethash ,key ,table)
+         (if ,found ,item
+             (setf (gethash ,key ,table) ,init-expr))))))
+
 (def macro with-memoize ((key &rest flags) &body code)
   "Memoizes the result of the code block using key; flags are passed to make-hash-table."
-  (with-unique-names (kv hv item found)
-    `(let ((,kv ,key)
-           (,hv (load-time-value (make-hash-table ,@flags))))
-       (multiple-value-bind (,item ,found) (gethash ,kv ,hv)
-         (if ,found ,item
-             (setf (gethash ,kv ,hv) (progn ,@code)))))))
+  `(gethash-with-init ,key
+                      (load-time-value (make-hash-table ,@flags))
+                      (progn ,@code)))
 
 (def function canonify-foreign-type (type)
   "Computes a canonic form of a C type."
