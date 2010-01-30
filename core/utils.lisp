@@ -18,6 +18,51 @@
      unless (member key keys)
      collect key and collect value))
 
+(def function open-temp-file (base-name &key
+                                        (direction :output)
+                                        (element-type 'character)
+                                        (external-format :default))
+  "Opens a new temporary file, using base-name as template."
+  (loop
+     with name = (pathname base-name)
+     for id from (get-universal-time)
+     do
+       (let* ((fname (format nil "~A~A" (pathname-name name) id))
+              (path (make-pathname :name fname :defaults name))
+              (file (open path :direction direction :if-exists nil
+                          :element-type element-type
+                          :external-format external-format)))
+         (when file
+           (return (values file path))))))
+
+(def function delete-if-exists (path)
+  (when (probe-file path)
+    (delete-file path)))
+
+(def macro with-temp-file ((path stream path-template &rest open-flags) write-code &body code)
+  "Takes care of creating and removing a new temporary file. Stream is accessible inside write-code."
+  (with-unique-names (temp-path wrtp ssave)
+    `(let (,path)
+       (unwind-protect
+            (progn
+              (let (,ssave ,wrtp)
+                (unwind-protect
+                     (multiple-value-bind (,stream ,temp-path)
+                         (open-temp-file ,path-template ,@open-flags)
+                       (setf ,path ,temp-path ,ssave ,stream)
+                       ,write-code
+                       (setf ,wrtp t))
+                  (when ,ssave
+                    (close ,ssave :abort (not ,wrtp)))))
+              ,@code)
+         (when ,path
+           (delete-if-exists ,path))))))
+
+(defun system-command (cmd)
+  #+ecl (ext:system cmd)
+  #+ccl (ccl::os-command cmd)
+  #-(or ecl ccl) (error "Not implemented"))
+
 #+ccl
 (def function double-offset-fixup (ivector)
   (case (ccl::typecode ivector)

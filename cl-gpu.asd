@@ -27,4 +27,5 @@
                (:module "cuda"
                 :depends-on ("core")
                 :components (#+cuda (:file "driver-api")
+                             (:file "nvcc")
                              #+cuda (:file "device-mem" :depends-on ("driver-api"))))))
