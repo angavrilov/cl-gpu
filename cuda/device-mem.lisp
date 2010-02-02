@@ -7,14 +7,16 @@
 (in-package :cl-gpu)
 
 (def function compute-linear-strides (blk dims elt-size pitch-level)
-  (if (cuda-linear-pitched-p blk)
-      (nconc (compute-strides (butlast dims pitch-level)
-                              (cuda-linear-pitch blk)
-                              (cuda-linear-extent blk))
-             (compute-strides (last dims pitch-level)
-                              elt-size
-                              (cuda-linear-width blk)))
-      (compute-strides dims elt-size (cuda-linear-extent blk))))
+  (assert (> pitch-level 0))
+  (if (and (cuda-linear-pitched-p blk)
+           (< pitch-level (length dims)))
+      (nconc (compute-strides (append (butlast dims pitch-level)
+                                      (list (/ (cuda-linear-pitch blk) elt-size)))
+                              (/ (cuda-linear-extent blk) elt-size))
+             (rest
+              (compute-strides (last dims pitch-level)
+                               (/ (cuda-linear-width blk) elt-size))))
+      (compute-strides dims (/ (cuda-linear-extent blk) elt-size))))
 
 (def class* cuda-mem-array (abstract-foreign-buffer)
   ((blk :type cuda-linear)
@@ -67,7 +69,7 @@
            (pitch-level (if (cuda-linear-pitched-p blk)
                             (loop ; Find which of the dims fit in the pitch line
                                for rdims on dimensions
-                               for i downfrom rank
+                               for i downfrom rank ; 1 <= i <= rank
                                for rsize = (reduce #'* rdims :initial-value elt-size)
                                if (<= rsize width)
                                do (progn

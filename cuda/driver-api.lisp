@@ -207,7 +207,8 @@
   (handle nil)
   (thread nil)
   (blocks nil)
-  (modules nil))
+  (modules nil)
+  (module-hash (make-hash-table :test #'eq)))
 
 (defstruct cuda-module
   "CUDA Module handle wrapper"
@@ -231,7 +232,8 @@
   (pitch 0 :type fixnum :read-only t)
   (pitch-elt 0 :type fixnum :read-only t)
   (handle nil)
-  (recover-cb nil))
+  (recover-cb nil)
+  (wipe-cb-list nil))
 
 (defmethod print-object ((object cuda-context) stream)
   (print-unreadable-object (object stream :identity t)
@@ -482,6 +484,11 @@
         (push blk (cuda-context-blocks context))
         blk))))
 
+(def function %cuda-linear-call-wipe-cb (blk)
+  (dolist (cb (cuda-linear-wipe-cb-list blk))
+    (with-simple-restart (resume-wipe "Continue invoking wipe callbacks")
+      (funcall cb blk))))
+
 (def function cuda-free-linear (blk)
   (if (cuda-linear-handle blk)
       (let ((context (cuda-linear-context blk)))
@@ -491,6 +498,7 @@
           (cuda-invoke cuMemFree (cuda-linear-handle blk))
           (setf (cuda-linear-handle blk) nil)
           (deletef (cuda-context-blocks context) blk)
+          (%cuda-linear-call-wipe-cb blk)
           nil))
       (cerror "ignore" "CUDA block already destroyed.")))
 
@@ -821,6 +829,8 @@
           (cuda-invoke cuModuleUnload (cuda-module-handle module))
           (%cuda-module-invalidate module)
           (deletef (cuda-context-modules context) module)
+          (dolist (var (cuda-module-vars module))
+            (%cuda-linear-call-wipe-cb (cdr var)))
           nil))
       (cerror "ignore" "CUDA module already destroyed.")))
 

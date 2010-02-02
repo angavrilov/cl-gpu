@@ -73,3 +73,60 @@
 (def test test/cuda-driver/cuda-linear-foreign-copy ()
   (with-fixtures (cuda-context foreign-arrs)
     (test/buffers/copy *cuda-arr1* *foreign-arr2* *cuda-arr3* *foreign-arr4*)))
+
+(def test test/cuda-driver/cuda-module-vars ()
+  (with-fixture cuda-context
+    (let ((module (make-instance 'cl-gpu::gpu-module :name nil
+                                 :globals (list (make-instance 'cl-gpu::gpu-global-var
+                                                               :name 'foo :c-name "foo" :index 0
+                                                               :item-type :float :dimension-mask nil)
+                                                (make-instance 'cl-gpu::gpu-global-var
+                                                               :name 'bar :c-name "bar" :index 1
+                                                               :item-type :float :dimension-mask #(2 nil 4))
+                                                (make-instance 'cl-gpu::gpu-global-var
+                                                               :name 'baz :c-name "baz" :index 2
+                                                               :item-type :float :dimension-mask #(2 6 4)))
+                                 :functions nil :kernels nil)))
+      (setf (cl-gpu::compiled-code-of module)
+            (cl-gpu::with-cuda-target
+              (cl-gpu::cuda-compile-kernel (cl-gpu::generate-c-code module))))
+      (symbol-macrolet ((instance (cl-gpu::get-module-instance module))
+                        (foo-var (aref (cl-gpu::gpu-module-instance-item-vector instance) 0))
+                        (bar-var (aref (cl-gpu::gpu-module-instance-item-vector instance) 1))
+                        (baz-var (aref (cl-gpu::gpu-module-instance-item-vector instance) 2))
+                        (foo-val (cl-gpu::gpu-global-value foo-var))
+                        (bar-val (cl-gpu::gpu-global-value bar-var))
+                        (baz-val (cl-gpu::gpu-global-value baz-var)))
+        (is (eq instance instance))
+        ;; Initially zero
+        (is (eql foo-val 0.0))
+        (is (eql bar-val nil))
+        (is (zero-buffer? baz-val))
+        ;; Fill in static data
+        (setf foo-val 3.0)
+        (is (eql foo-val 3.0))
+        (set-index-buffer baz-val)
+        (is (index-buffer? baz-val))
+        ;; Attach an array
+        (setf bar-val (cuda-make-array '(2 10 4) :foreign-type :float :pitch-elt-size 16))
+        (is (bufferp bar-val))
+        (is (eql (deref-buffer bar-val) 1))
+        (is (equal (rest (coerce (buffer-as-array (cl-gpu::buffer-of bar-var)) 'list))
+                   '(80 2 10 4 1280 640 64)))
+        ;; Fill the attached array
+        (set-index-buffer bar-val)
+        (is (index-buffer? bar-val))
+        ;; Force a reload
+        (let ((old-handle (cl-gpu::cuda-module-instance-handle instance)))
+          (reinitialize-instance module)
+          (is (not (eql old-handle (cl-gpu::cuda-module-instance-handle instance)))))
+        ;; Verify that the values are still there
+        (is (eql foo-val 3.0))
+        (is (index-buffer? bar-val))
+        (is (index-buffer? baz-val))
+        ;; Verify auto-wipe
+        (handler-bind ((warning #'ignore-warning))
+          (deref-buffer bar-val))
+        (is (eq bar-val nil))
+        (is (zero-buffer? (cl-gpu::buffer-of bar-var)))))))
+

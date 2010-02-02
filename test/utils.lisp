@@ -8,6 +8,10 @@
 
 (defsuite* (test/utils :in test))
 
+(defun ignore-warning (condition)
+  (declare (ignore condition))
+  (muffle-warning))
+
 (def test test/utils/r-w-array ()
   (let ((arr (make-array 5 :element-type 'single-float
                          :initial-contents '(0.0 0.1 0.2 0.3 0.4))))
