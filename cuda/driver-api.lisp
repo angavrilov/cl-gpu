@@ -208,7 +208,22 @@
   (thread nil)
   (blocks nil)
   (modules nil)
-  (module-hash (make-hash-table :test #'eq)))
+  (module-hash (make-hash-table :test #'eq))
+  (reg-count 0)
+  (warp-size 0)
+  (shared-memory 0))
+
+(defstruct cuda-function
+  "CUDA Kernel handle wrapper"
+  (handle nil)
+  (name nil :type string :read-only t)
+  (context nil :type cuda-context :read-only t)
+  (module nil :type cuda-module :read-only t)
+  (num-regs 0)
+  (local-bytes 0)
+  (shared-bytes 0)
+  (const-bytes 0)
+  (max-block-size 0))
 
 (defstruct cuda-module
   "CUDA Module handle wrapper"
@@ -217,7 +232,7 @@
   (source nil)
   (vars nil)
   (texrefs nil)
-  (kernels nil))
+  (functions nil))
 
 (defstruct cuda-linear
   "CUDA linear block wrapper"
@@ -287,7 +302,13 @@
       (let* ((thread (current-thread))
              (context (make-cuda-context :device device
                                          :handle (mem-ref phandle 'cuda-context-handle)
-                                         :thread thread)))
+                                         :thread thread
+                                         :reg-count (cuda-device-attr
+                                                     device :max-registers-per-block)
+                                         :warp-size (cuda-device-attr
+                                                     device :warp-size)
+                                         :shared-memory (cuda-device-attr
+                                                         device :max-shared-memory-per-block))))
         (push context *cuda-context-list*)
         (push context (gethash thread *cuda-thread-contexts*))
         context))))
@@ -782,14 +803,17 @@
   (print-unreadable-object (object stream :identity t)
     (format stream "CUDA Module: ~S ~S"
             (mapcar #'car (cuda-module-vars object))
-            (mapcar #'car (cuda-module-kernels object)))
+            (mapcar #'cuda-function-name
+                    (cuda-module-functions object)))
     (unless (cuda-module-handle object)
       (format stream " (DEAD)"))))
 
 (def function %cuda-module-invalidate (module)
   (setf (cuda-module-handle module) nil)
   (dolist (var (cuda-module-vars module))
-    (setf (cuda-linear-handle (cdr var)) nil)))
+    (setf (cuda-linear-handle (cdr var)) nil))
+  (dolist (fun (cuda-module-functions module))
+    (setf (cuda-function-handle fun) nil)))
 
 (def function cuda-load-module-pointer (source image-ptr &key max-registers threads-per-block optimization-level)
   (assert (cuda-valid-context-p (cuda-current-context)))
@@ -850,3 +874,116 @@
                                           :handle (mem-ref paddr 'cuda-device-ptr))))
               (push (cons name blk) (cuda-module-vars module))
               (values blk)))))))
+
+;;; Kernels
+
+(defcenum cuda-function-attr
+  (:max-threads-per-block 0)
+  :shared-size-bytes :const-size-bytes
+  :local-size-bytes :num-regs)
+
+(defcfun "cuFuncGetAttribute" cuda-error
+  (ptr  (:pointer :int))
+  (attr cuda-function-attr)
+  (func cuda-kernel-handle))
+
+(defcfun "cuFuncSetBlockShape" cuda-error
+  (handle cuda-kernel-handle)
+  (x      :int)
+  (y      :int)
+  (z      :int))
+
+(defcfun "cuLaunchGrid" cuda-error
+  (handle cuda-kernel-handle)
+  (x      :int)
+  (y      :int))
+
+(defcfun ("cuParamSetf" cuda-param-set-float) cuda-error
+  (handle cuda-kernel-handle)
+  (offset :int)
+  (value  :float))
+
+(defcfun ("cuParamSeti" cuda-param-set-uint32) cuda-error
+  (handle cuda-kernel-handle)
+  (offset :int)
+  (value  :unsigned-int))
+
+(defcfun ("cuParamSeti" cuda-param-set-int32) cuda-error
+  (handle cuda-kernel-handle)
+  (offset :int)
+  (value  :int))
+
+(defcfun "cuParamSetv" cuda-error
+  (handle cuda-kernel-handle)
+  (offset :int)
+  (ptr    :pointer)
+  (size   :unsigned-int))
+
+(macrolet ((gen (type)
+             (let ((name (symbolicate 'cuda-param-set- type)))
+               `(defun ,name (handle offset value)
+                  (with-foreign-object (pobj ,type)
+                    (setf (mem-ref pobj ,type) value)
+                    (cuda-invoke cuParamSetv handle offset pobj
+                                 ,(foreign-type-size type)))))))
+  (gen :int8) (gen :uint8)
+  (gen :int16) (gen :uint16)
+  (gen :double))
+
+(def function cuda-param-setter-name (type)
+  (macrolet ((gen (&rest types)
+               `(case type
+                  ,@(mapcar (lambda (type)
+                             `(,type ',(symbolicate 'cuda-param-set- type)))
+                           types))))
+    (gen :int8 :uint8 :int16 :uint16 :int32 :uint32 :float :double)))
+
+(defcfun "cuParamSetSize" cuda-error
+  (handle cuda-kernel-handle)
+  (size   :unsigned-int))
+
+(def function cuda-func-attr (fhandle attr)
+  "Retrieve information about a CUDA kernel handle."
+  (with-foreign-object (tmp :int)
+    (cuda-invoke cuFuncGetAttribute tmp attr fhandle)
+    (mem-ref tmp :int)))
+
+(def function cuda-module-get-function (module name)
+  "Returns a function object for a kernel."
+  (or (find name (cuda-module-functions module)
+            :key #'cuda-function-name)
+      (with-cuda-context ((cuda-module-context module))
+        (let ((handle (cuda-module-ensure-handle module)))
+          (with-foreign-object (pfun 'cuda-kernel-handle)
+            (cuda-invoke cuModuleGetFunction pfun handle name)
+            (let* ((handle (mem-ref pfun 'cuda-kernel-handle))
+                   (fun (make-cuda-function
+                         :context *cuda-context* :module module
+                         :name name :handle handle
+                         :num-regs (cuda-func-attr handle :num-regs)
+                         :shared-bytes (cuda-func-attr handle :shared-size-bytes)
+                         :local-bytes (cuda-func-attr handle :local-size-bytes)
+                         :const-bytes (cuda-func-attr handle :const-size-bytes)
+                         :max-block-size (cuda-func-attr handle :max-threads-per-block))))
+              (push fun (cuda-module-functions module))
+              (values fun)))))))
+
+(def function cuda-function-ensure-handle (fun)
+  (or (cuda-function-handle fun)
+      (error "Module has already been unloaded: ~S" fun)))
+
+(def function cuda-function-valid-p (fun)
+  (and (cuda-function-p fun)
+       (not (null (cuda-function-handle fun)))))
+
+(defmethod print-object ((object cuda-function) stream)
+  (print-unreadable-object (object stream :identity t)
+    (format stream "CUDA Kernel: ~A ~S/~S/~S/~S:~S"
+            (cuda-function-name object)
+            (cuda-function-num-regs object)
+            (cuda-function-shared-bytes object)
+            (cuda-function-local-bytes object)
+            (cuda-function-const-bytes object)
+            (cuda-function-max-block-size object))
+    (unless (cuda-function-handle object)
+      (format stream " (DEAD)"))))

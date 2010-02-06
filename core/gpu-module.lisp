@@ -73,25 +73,31 @@
   (:documentation "A GPU function or kernel parameter."))
 
 (def method initialize-instance :after ((obj gpu-argument) &key &allow-other-keys)
-  (with-slots (dimension-mask included-dims included-strides) obj
+  (with-slots (dimension-mask included-dims included-strides
+                              static-asize includes-locked?) obj
     (when dimension-mask
       (unless included-dims
         (setf included-dims
               (make-array (length dimension-mask) :initial-element nil)))
       (unless included-strides
         (setf included-strides
-              (make-array (1- (length dimension-mask)) :initial-element nil))))))
+              (make-array (1- (length dimension-mask)) :initial-element nil)))
+      (when static-asize
+        (setf includes-locked? t)))))
 
 (def class* gpu-function ()
   ((name           :documentation "Lisp name of the function")
    (c-name         :documentation "C name of the function")
    (return-type    :documentation "Return type")
    (arguments      :documentation "List of arguments")
-   (body           :documentation "Body tree"))
+   (body           ""
+                   :documentation "Body tree"))
   (:documentation "A function usable on the GPU"))
 
 (def class* gpu-kernel (gpu-function)
-  ((index          :documentation "Ordinal for fast access"))
+  ((index          :documentation "Ordinal for fast access")
+   (invoker-form   :documentation "Lambda form of the invoker.")
+   (invoker-fun    :documentation "Compiled invoker."))
   (:default-initargs :return-type :void)
   (:documentation "A kernel callable from the host"))
 

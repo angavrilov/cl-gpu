@@ -22,7 +22,7 @@
           (call-next-method)))
 
 (def layered-method generate-c-code :in cuda-target ((obj gpu-function))
-  (format nil "~A ~A"
+  (format nil "extern \"C\" ~A ~A"
           (if (typep obj 'gpu-kernel)
               "__global__"
               "__device__")
@@ -207,6 +207,89 @@
   (setf (value-of item) nil)
   (deref-buffer obj))
 
+;;; CUDA kernels
+
+(def class* cuda-kernel (closer-mop:funcallable-standard-object)
+  ((instance :type cuda-module-instance)
+   (fun-decl :type gpu-kernel)
+   (fun-obj  :type cuda-function))
+  (:documentation "Generic implementation of a module-global var")
+  (:metaclass closer-mop:funcallable-standard-class))
+
+(def constructor cuda-kernel
+  (let* ((module (cuda-module-instance-handle (instance-of -self-)))
+         (decl (fun-decl-of -self-))
+         (fobj (cuda-module-get-function module (c-name-of decl))))
+    (setf (fun-obj-of -self-) fobj)
+    (let ((fun (funcall (invoker-fun-of decl) -self-)))
+      (closer-mop:set-funcallable-instance-function -self- fun))))
+
+(def function generate-arg-setter (obj offset fhandle)
+  (with-slots (name item-type dimension-mask static-asize
+                    include-size? included-dims
+                    include-extent? included-strides) obj
+    (if (null dimension-mask)
+        `(,(cuda-param-setter-name item-type) ,fhandle ,offset ,name)
+        (let ((wofs (+ offset +cuda-ptr-size+ -4))
+              (dynarr (null static-asize)))
+          (flet ((setter (value)
+                   `(cuda-param-set-uint32 ,fhandle ,(incf wofs 4) ,value)))
+            (let ((obj (make-symbol (symbol-name name)))
+                  (items (list
+                          (when (and dynarr include-size?)
+                            (setter 'size))
+                          (let ((items (when dynarr
+                                         (loop for i from 0 for flag across included-dims
+                                            when flag collect (setter `(aref adims ,i)))))
+                                (checks (loop for i from 0 for check across dimension-mask
+                                           when check collect
+                                           `(assert (= (aref adims ,i) ,check)))))
+                            (when (or items checks)
+                              `(let ((adims dims))
+                                 (declare (type (vector uint32) adims))
+                                 ,@(nconc checks items))))
+                          (when dynarr
+                            (let ((ext (when include-extent?
+                                         (setter '(aref astrides 0))))
+                                  (items (loop for i from 1 for flag across included-strides
+                                            when flag collect (setter `(aref astrides ,i)))))
+                              (when (or ext items)
+                                `(let ((astrides strides))
+                                   (declare (type (vector uint32) astrides))
+                                   ,@(if ext (list* ext items) items))))))))
+              `(let ((,obj ,name))
+                 (check-type ,obj cuda-mem-array)
+                 (with-slots (blk elt-type size dims strides) ,obj
+                   (with-cuda-context ((cuda-linear-context blk))
+                     (assert (equal elt-type ',item-type))
+                     (cuda-param-set-uint32 ,fhandle ,offset (cuda-linear-ensure-handle blk))
+                     ,@(remove-if #'null items))))))))))
+
+(def layered-method generate-invoker-form :in cuda-target ((obj gpu-kernel))
+  (multiple-value-bind (args arg-size)
+      (compute-field-layout obj 0)
+    (with-unique-names (kernel fobj fhandle bx by bz gx gy)
+      (let* ((arg-names (mapcar #'name-of (arguments-of obj)))
+             (arg-setters
+              (mapcar (lambda (arg)
+                        (destructuring-bind (obj offset size) arg
+                          (declare (ignore size))
+                          (generate-arg-setter obj offset fhandle)))
+                      args)))
+        `(lambda (,kernel)
+           (declare (type cuda-kernel ,kernel))
+           (let ((,fobj (fun-obj-of ,kernel)))
+             (declare (type cuda-function ,fobj))
+             (lambda (,@arg-names &key
+                 ((:block-x ,bx) 1) ((:block-y ,by) 1) ((:block-z ,bz) 1)
+                 ((:grid-x ,gx) 1) ((:grid-y ,gy) 1))
+               (let* ((,fhandle (cuda-function-ensure-handle ,fobj)))
+                 (with-cuda-context ((cuda-function-context ,fobj))
+                   ,@arg-setters
+                   (cuda-invoke cuParamSetSize ,fhandle ,arg-size)
+                   (cuda-invoke cuFuncSetBlockShape ,fhandle ,bx ,by ,bz)
+                   (cuda-invoke cuLaunchGrid ,fhandle ,gx ,gy))))))))))
+
 ;;; Module instantiation
 
 (def layered-method instantiate-module-item
@@ -222,6 +305,12 @@
                 t)
         (warn "Dropping incompatible value ~A for field ~A" old-value (name-of item))))
     (values var-instance)))
+
+(def layered-method instantiate-module-item
+  :in cuda-target ((item gpu-kernel) instance &key old-value)
+  (declare (ignore old-value))
+  (make-instance 'cuda-kernel :fun-decl item :instance instance))
+
 
 (def layered-method load-gpu-module-instance :in cuda-target ((module gpu-module))
   (format t "Loading CUDA module ~A~%" (name-of module))
@@ -245,3 +334,8 @@
 (def layered-method compile-object :in cuda-target ((module gpu-module))
   (setf (compiled-code-of module)
         (cuda-compile-kernel (generate-c-code module))))
+
+(def layered-method post-compile-object :in cuda-target ((kernel gpu-kernel))
+  (let ((form (generate-invoker-form kernel)))
+    (setf (invoker-form-of kernel) form
+          (invoker-fun-of kernel) (coerce form 'function))))

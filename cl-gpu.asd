@@ -31,4 +31,4 @@
                 :components (#+cuda (:file "driver-api")
                              #+cuda (:file "device-mem" :depends-on ("driver-api"))
                              (:file "nvcc")
-                             #+cuda (:file "module" :depends-on ("device-mem"))))))
+                             #+cuda (:file "module" :depends-on ("device-mem" "nvcc"))))))
