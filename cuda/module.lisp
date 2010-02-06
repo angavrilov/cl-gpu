@@ -11,6 +11,9 @@
 (def macro with-cuda-target (&body code)
   `(with-active-layers (cuda-target) ,@code))
 
+(def method call-with-target ((target (eql :cuda)) thunk)
+  (with-cuda-target (funcall thunk)))
+
 (def layered-method generate-c-code :in cuda-target ((obj gpu-global-var))
   (format nil "~A ~A"
           (if (or (constant-var? obj) (dynarray-var? obj))
@@ -25,6 +28,16 @@
               "__device__")
           (call-next-method)))
 
+(def layered-method c-type-size :in cuda-target (type)
+  (case type
+    (:pointer +cuda-ptr-size+)
+    (otherwise (call-next-method))))
+
+(def layered-method c-type-alignment :in cuda-target (type)
+  (case type
+    (:pointer +cuda-ptr-size+)
+    (otherwise (call-next-method))))
+
 (def function lookup-cuda-module (module-id)
   (let* ((context (cuda-current-context))
          (instance (gethash-with-init module-id (cuda-context-module-hash context)
@@ -35,7 +48,11 @@
         (upgrade-gpu-module-instance module-id instance)))
     instance))
 
-(setf *gpu-module-lookup-fun* #'lookup-cuda-module)
+
+(def method target-module-lookup-fun ((target (eql :cuda)))
+  #'lookup-cuda-module)
+
+(setf *current-gpu-target* :cuda)
 
 ;;; Instance
 

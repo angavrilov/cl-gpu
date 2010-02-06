@@ -6,7 +6,26 @@
 
 (in-package :cl-gpu)
 
+(defvar *%cur-gpu-target* nil)
+
+(declaim (inline cur-gpu-target))
+(def function cur-gpu-target () *%cur-gpu-target*)
+
+(def (symbol-macro e) *current-gpu-target* (cur-gpu-target)
+  "Current GPU target name")
+
+(def generic call-with-target (target thunk))
+(def generic target-module-lookup-fun (target))
+
+(def macro with-current-target (&body code)
+  `(call-with-target *%cur-gpu-target* (lambda () ,@code)))
+
 (defvar *gpu-module-lookup-fun* nil)
+
+(def function (setf cur-gpu-target) (new-tgt)
+  (let ((lfun (target-module-lookup-fun new-tgt)))
+    (setf *gpu-module-lookup-fun* lfun
+          *%cur-gpu-target* new-tgt)))
 
 (defvar *named-gpu-modules*
   (make-hash-table :test #'eq #+sbcl :synchronized #+sbcl t)
