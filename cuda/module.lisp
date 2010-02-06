@@ -241,3 +241,7 @@
   ;; Verify the context early
   (with-cuda-context ((cuda-module-context (cuda-module-instance-handle instance)))
     (call-next-method)))
+
+(def layered-method compile-object :in cuda-target ((module gpu-module))
+  (setf (compiled-code-of module)
+        (cuda-compile-kernel (generate-c-code module))))

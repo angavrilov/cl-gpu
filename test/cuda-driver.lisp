@@ -87,9 +87,7 @@
                                                                :name 'baz :c-name "baz" :index 2
                                                                :item-type :float :dimension-mask #(2 6 4)))
                                  :functions nil :kernels nil)))
-      (setf (cl-gpu::compiled-code-of module)
-            (cl-gpu::with-cuda-target
-              (cl-gpu::cuda-compile-kernel (cl-gpu::generate-c-code module))))
+      (cl-gpu::compile-gpu-module module)
       (symbol-macrolet ((instance (cl-gpu::get-module-instance module))
                         (foo-var (aref (cl-gpu::gpu-module-instance-item-vector instance) 0))
                         (bar-var (aref (cl-gpu::gpu-module-instance-item-vector instance) 1))

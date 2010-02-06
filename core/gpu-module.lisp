@@ -100,24 +100,62 @@
    (globals         :documentation "List of global variables")
    (functions       :documentation "List of helper functions")
    (kernels         :documentation "List of kernel functions")
-   (index-table     (make-hash-table)
-                    :documentation "An index assignment table")
+   (index-table     :documentation "An index assignment table")
    (compiled-code   :documentation "Code string")
    (change-sentinel (cons t nil)
                     :documentation "Used to trigger module reloads"))
   (:documentation "A module that can be loaded to the GPU."))
 
+(def constructor gpu-module
+  (unless (slot-boundp -self- 'index-table)
+    (setf (index-table-of -self-)
+          (aif (name-of -self-)
+               (aif (find-gpu-module it)
+                    (index-table-of it)
+                    nil)
+               nil))))
+
+(def layered-function compile-object (module)
+  (:method ((obj t)) nil))
+
+(def layered-function post-compile-object (module)
+  (:method ((obj t)) nil))
+
 ;;; Namespace
 
 (def function reindex-gpu-module (module)
-  (let* ((idx-tbl (index-table-of module))
-         (max-idx (reduce #'max (hash-table-values idx-tbl)
-                          :initial-value -1)))
-    (dolist (item (append (globals-of module)
-                          (kernels-of module)))
-      (setf (index-of item)
-            (gethash-with-init (name-of item) idx-tbl
-                               (incf max-idx))))))
+  (declare (type gpu-module module))
+  (with-slots (index-table) module
+    (let ((max-idx (reduce #'max index-table :key #'cdr :initial-value -1)))
+      (flet ((process-items (items tag)
+               (dolist (item items)
+                 (let* ((name (name-of item))
+                        (key (cons tag name))
+                        (entry (assoc key index-table :test #'equal))
+                        (nidx (cdr entry)))
+                   (if (slot-boundp item 'index)
+                       ;; Already has an index
+                       (let ((cur-idx (index-of item)))
+                         (maxf max-idx cur-idx)
+                         (unless (and nidx (= nidx cur-idx))
+                           (awhen (rassoc cur-idx index-table :test #'eql)
+                             (warn "Index ~A for ~A is superseded by ~A ~A"
+                                   cur-idx (car it) tag name)
+                             (removef index-table it))
+                           (cond ((null nidx)
+                                  (push (cons key cur-idx) index-table))
+                                 (t
+                                  (warn "Forcing ~A ~A index from ~A to ~A"
+                                        tag name nidx cur-idx)
+                                  (setf (cdr entry) cur-idx)))))
+                       ;; Lookup an index
+                       (progn
+                         (unless nidx
+                           (setf nidx (incf max-idx))
+                           (push (cons key nidx) index-table))
+                         (setf (index-of item) nidx)))))))
+        (process-items (globals-of module) :global)
+        (process-items (kernels-of module) :kernel)))))
 
 (def method reinitialize-instance :after ((obj gpu-module) &key &allow-other-keys)
   (setf (car (change-sentinel-of obj)) nil)
@@ -128,16 +166,27 @@
       (if (name-of module)
           (let ((old-instance (find-gpu-module (name-of module))))
             (if old-instance
-                (prog1
-                    (reinitialize-instance old-instance
-                                           :globals (globals-of module)
-                                           :functions (functions-of module)
-                                           :kernels (kernels-of module)
-                                           :compiled-code (compiled-code-of module))
-                  (setf (index-table-of module) (index-table-of old-instance)))
+                (reinitialize-instance old-instance
+                                       :globals (globals-of module)
+                                       :functions (functions-of module)
+                                       :kernels (kernels-of module)
+                                       :compiled-code (compiled-code-of module))
                 (setf (find-gpu-module (name-of module)) module)))
           module)
-    (reindex-gpu-module it)))
+    (reindex-gpu-module it)
+    (unless (eq it module)
+      (setf (index-table-of module) (index-table-of it)))))
+
+(def function compile-gpu-module (module)
+  (with-current-target
+    (dolist (krnl (kernels-of module))
+      (compile-object krnl))
+    (compile-object module))
+  (aprog1 (finalize-gpu-module module)
+    (with-current-target
+      (dolist (krnl (kernels-of it))
+        (post-compile-object krnl))
+      (post-compile-object it))))
 
 ;;; Instance management
 
