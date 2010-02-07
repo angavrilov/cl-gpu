@@ -25,7 +25,8 @@
                              (:file "buffers" :depends-on ("typedefs" "utils"))
                              (:file "foreign-buf" :depends-on ("buffers"))
                              (:file "gpu-module" :depends-on ("buffers"))
-                             (:file "codegen" :depends-on ("gpu-module"))))
+                             (:file "codegen" :depends-on ("gpu-module"))
+                             (:file "syntax" :depends-on ("gpu-module"))))
                (:module "cuda"
                 :depends-on ("core")
                 :components (#+cuda (:file "driver-api")

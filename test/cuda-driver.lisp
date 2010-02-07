@@ -76,17 +76,10 @@
 
 (def test test/cuda-driver/cuda-module-vars ()
   (with-fixture cuda-context
-    (let ((module (make-instance 'cl-gpu::gpu-module :name nil
-                                 :globals (list (make-instance 'cl-gpu::gpu-global-var
-                                                               :name 'foo :c-name "foo" :index 0
-                                                               :item-type :float :dimension-mask nil)
-                                                (make-instance 'cl-gpu::gpu-global-var
-                                                               :name 'bar :c-name "bar" :index 1
-                                                               :item-type :float :dimension-mask #(2 nil 4))
-                                                (make-instance 'cl-gpu::gpu-global-var
-                                                               :name 'baz :c-name "baz" :index 2
-                                                               :item-type :float :dimension-mask #(2 6 4)))
-                                 :functions nil :kernels nil)))
+    (let ((module (cl-gpu::parse-gpu-module-spec
+                   '((:variable foo single-float)
+                     (:variable bar (array single-float (2 * 4)))
+                     (:variable baz (array single-float (2 6 4)))))))
       (cl-gpu::compile-gpu-module module)
       (symbol-macrolet ((instance (cl-gpu::get-module-instance module))
                         (foo-var (aref (cl-gpu::gpu-module-instance-item-vector instance) 0))
