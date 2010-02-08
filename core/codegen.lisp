@@ -156,18 +156,18 @@
            (format nil "~A *~A" (c-type-string item-type) c-name))
           (t
            (list*
-            (format nil "~A *~A__v" (c-type-string item-type) c-name)
+            (format nil "~A *~A" (c-type-string item-type) c-name)
             (if (not static-asize)
                 (nconc (if include-size?
-                           (list (format nil "unsigned ~A__d" c-name)))
+                           (list (format nil "unsigned ~A__D" c-name)))
                        (loop for i from 0 for flag across included-dims
                           when flag collect
-                            (format nil "unsigned ~A__d~A" c-name i))
+                            (format nil "unsigned ~A__D~A" c-name i))
                        (if include-extent?
-                           (list (format nil "unsigned ~A__x" c-name)))
+                           (list (format nil "unsigned ~A__X" c-name)))
                        (loop for i from 0 for flag across included-strides
                           when flag collect
-                            (format nil "unsigned ~A__s~A" c-name i)))))))))
+                            (format nil "unsigned ~A__S~A" c-name i)))))))))
 
 (def layered-method compute-field-layout ((obj gpu-argument) start-offset)
   (with-slots (c-name item-type dimension-mask static-asize
@@ -191,9 +191,7 @@
 
 (def layered-method generate-var-ref ((obj gpu-argument))
   (with-slots (c-name) obj
-    (if (dynarray-var? obj)
-        (format nil "~A__v" c-name)
-        c-name)))
+    c-name))
 
 (def macro with-ensure-unlocked ((obj expr) &body code)
   `(progn
@@ -206,20 +204,20 @@
   (with-slots (c-name dimension-mask included-dims) obj
     (or (aref dimension-mask idx)
         (with-ensure-unlocked (obj (aref included-dims idx))
-          (format nil "~A__d~A" c-name idx)))))
+          (format nil "~A__D~A" c-name idx)))))
 
 (def layered-method generate-array-size ((obj gpu-argument))
   (with-slots (c-name dimension-mask static-asize include-size?) obj
     (assert dimension-mask)
     (or static-asize
         (with-ensure-unlocked (obj include-size?)
-          (format nil "~A__d" c-name)))))
+          (format nil "~A__D" c-name)))))
 
 (def layered-method generate-array-extent ((obj gpu-argument))
   (with-slots (c-name static-asize include-extent?) obj
     (or static-asize
         (with-ensure-unlocked (obj include-extent?)
-          (format nil "~A__x" c-name)))))
+          (format nil "~A__X" c-name)))))
 
 (def layered-method generate-array-stride ((obj gpu-argument) idx)
   (with-slots (c-name dimension-mask static-asize included-strides) obj
@@ -227,7 +225,7 @@
            (reduce #'* dimension-mask :start (1+ idx)))
           (dimension-mask
            (with-ensure-unlocked (obj (aref included-strides idx))
-             (format nil "~A__s~A" c-name idx)))
+             (format nil "~A__S~A" c-name idx)))
           (t (error "Not an array")))))
 
 (def layered-method compute-field-layout ((obj gpu-function) start-offset)

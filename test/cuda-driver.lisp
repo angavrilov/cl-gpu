@@ -137,8 +137,8 @@
                                         (make-instance 'cl-gpu::gpu-argument
                                                        :name 'baz :c-name "Abaz"
                                                        :item-type :float :dimension-mask #(2 6 4)))
-                                  :body "buf[0] = (unsigned)Abar__v; buf[1] = Abar__d; buf[2] = Abar__d1;
- buf[3] = Abar__x; buf[4] = Abar__s0; buf[5] = Abar__s1;
+                                  :body "buf[0] = (unsigned)Abar; buf[1] = Abar__D; buf[2] = Abar__D1;
+ buf[3] = Abar__X; buf[4] = Abar__S0; buf[5] = Abar__S1;
  buf[6] = (unsigned)Abaz;"))
            (module (make-instance 'cl-gpu::gpu-module :name nil
                                   :globals (list (make-instance 'cl-gpu::gpu-global-var
