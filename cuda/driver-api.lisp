@@ -506,8 +506,8 @@
         blk))))
 
 (def function %cuda-linear-call-wipe-cb (blk)
-  (dolist (cb (cuda-linear-wipe-cb-list blk))
-    (with-simple-restart (resume-wipe "Continue invoking wipe callbacks")
+  (dolist (cb (copy-list (cuda-linear-wipe-cb-list blk)))
+    (with-simple-restart (continue "Continue invoking wipe callbacks")
       (funcall cb blk))))
 
 (def function cuda-free-linear (blk)
