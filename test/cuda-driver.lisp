@@ -23,16 +23,19 @@
 (defvar *cuda-arr4*)
 
 (defixture cuda-context
-  (:setup (setf *cuda-ctx* (cuda-create-context 0))
-          (setf *cuda-arr1* (cuda-make-array '(5 5) :element-type 'single-float
-                                             :pitch-elt-size 4 :initial-element 0.0))
-          (setf *cuda-arr2* (cuda-make-array '(5 5) :element-type 'single-float
-                                             :pitch-elt-size 4 :initial-element 0.0))
-          (setf *cuda-arr3* (cuda-make-array '(5 5) :element-type 'single-float
-                                             :pitch-elt-size 16 :initial-element 0))
-          (setf *cuda-arr4* (cuda-make-array '(5 5) :element-type 'single-float
-                                             :initial-element 0)))
-  (:teardown (cuda-destroy-context *cuda-ctx*)))
+  (setf *cuda-ctx* (cuda-create-context 0))
+  (unwind-protect
+       (progn
+         (setf *cuda-arr1* (cuda-make-array '(5 5) :element-type 'single-float
+                                            :pitch-elt-size 4 :initial-element 0.0))
+         (setf *cuda-arr2* (cuda-make-array '(5 5) :element-type 'single-float
+                                            :pitch-elt-size 4 :initial-element 0.0))
+         (setf *cuda-arr3* (cuda-make-array '(5 5) :element-type 'single-float
+                                            :pitch-elt-size 16 :initial-element 0))
+         (setf *cuda-arr4* (cuda-make-array '(5 5) :element-type 'single-float
+                                            :initial-element 0))
+         (-body-))
+    (cuda-destroy-context *cuda-ctx*)))
 
 (def test verify-wrap-pitch (blk offset size commands)
   (cl-gpu::%cuda-linear-wrap-pitch blk offset size
