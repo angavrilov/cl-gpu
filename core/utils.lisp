@@ -6,7 +6,7 @@
 
 (in-package :cl-gpu)
 
-(def macro with-anaphoric-names ((namelist &key prefix) &body code)
+(def macro with-capturing-names ((namelist &key prefix) &body code)
   "Defines symbols in the list as symbols in the current package with the same names."
   `(let ,(mapcar (lambda (name)
                    `(,name (symbolicate ,@(ensure-list prefix) ',name)))

@@ -524,8 +524,8 @@
       (cerror "ignore" "CUDA block already destroyed.")))
 
 (def macro with-pitch-mapping-vars ((blk offset size &key (prefix "")) &body code)
-  "Anaphoric macro that defines variables with various pitch parameters."
-  (with-anaphoric-names ((width pitch start-y start-x end-y end-x one-row-p start-offset)
+  "Non-hygienic macro that defines variables with various pitch parameters."
+  (with-capturing-names ((width pitch start-y start-x end-y end-x one-row-p start-offset)
                          :prefix prefix)
     `(bind ((,width (cuda-linear-width ,blk))
             (,pitch (cuda-linear-pitch ,blk))
