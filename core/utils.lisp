@@ -6,6 +6,8 @@
 
 (in-package :cl-gpu)
 
+;;; Misc
+
 (def macro with-capturing-names ((namelist &key prefix) &body code)
   "Defines symbols in the list as symbols in the current package with the same names."
   `(let ,(mapcar (lambda (name)
@@ -19,6 +21,8 @@
                        (getf options :in))
               (list :in it))
             (getf options :mode))))
+
+;;; Temporary files
 
 (def function open-temp-file (base-name &key
                                         (direction :output)
@@ -64,6 +68,8 @@
   #+ecl (ext:system cmd)
   #+ccl (ccl::os-command cmd)
   #-(or ecl ccl) (error "Not implemented"))
+
+;;; Array I/O
 
 #+ccl
 (def function double-offset-fixup (ivector)
@@ -191,6 +197,8 @@
       (read-array-bytes array stream)
       array)))
 
+;;; Array copying
+
 (def function compute-strides (dims max-size)
   (let ((strides (maplist (lambda (rdims)
                             (reduce #'* rdims))
@@ -201,15 +209,6 @@
 
 (def function to-uint32-vector (list)
   (make-array (length list) :element-type '(unsigned-byte 32) :initial-contents list))
-
-(def (function e) copy-array (array)
-  "Create a new array with the same contents."
-  (let ((dims (array-dimensions array)))
-    (adjust-array
-     (make-array dims
-                 :element-type (array-element-type array)
-                 :displaced-to array)
-     dims)))
 
 (def function %portable-copy-array-data (src-array src-ofs dest-array dest-ofs count)
   (declare (type fixnum src-ofs dest-ofs count)
@@ -297,3 +296,57 @@
       ;; Return the count
       rcount)))
 
+;;; Unique identifiers
+
+(defvar *unique-id-template* (make-hash-table :test #'equal))
+
+(def definer reserved-c-names (&rest names)
+  `(dolist (id ',names)
+     (setf (gethash id *unique-id-template*) 0)))
+
+(def reserved-c-names
+    "break" "case" "char" "const" "continue" "default" "do"
+    "double" "else" "enum" "extern" "float" "for" "goto" "if"
+    "inline" "int" "long" "register" "return" "short" "signed"
+    "sizeof" "static" "struct" "switch" "typedef" "union"
+    "unsigned" "void" "volatile" "while"
+    "restrict" "_Bool" "_Complex" "_Imaginary"
+    "uint_least16_t" "uint_least32_t"
+    "asm" "bool" "catch" "class" "const_cast" "delete" "dynamic_cast"
+    "explicit" "export" "false" "friend" "mutable" "namespace"
+    "new" "operator" "private" "protected" "public" "reinterpret_cast"
+    "static_cast" "template" "this" "throw" "true" "try" "typeid"
+    "typename" "using" "virtual" "wchar_t" "typeof")
+
+(def function make-c-name-table ()
+  (copy-hash-table *unique-id-template* :test #'equal))
+
+(def function symbol-to-c-name (name)
+  "Converts the symbol name to a suitable C identifier."
+  (coerce (loop
+             for char across (string-downcase (symbol-name name))
+             and prev-char = nil then char
+             ;; Can't begin with a number
+             when (and (digit-char-p char) (null prev-char))
+               collect #\N
+             ;; Alphanumeric: verbatim
+             if (alphanumericp char) collect char
+             ;; Dash to underscore, and don't repeat
+             else if (member char '(#\_ #\-))
+               when (not (eql prev-char #\_))
+                 collect (setf char #\_)
+               end
+             ;; Others: use the code
+             else append (coerce (format nil "U~X" (char-code char)) 'list))
+          'string))
+
+(def function unique-c-name (name table)
+  "Makes a unique C name using the table for duplicate avoidance."
+  (labels ((handle (name)
+             (if (gethash name table)
+                 (handle (format nil "~AX~A" name
+                                 (incf (gethash name table))))
+                 (progn
+                   (setf (gethash name table) 0)
+                   name))))
+    (handle (symbol-to-c-name name))))

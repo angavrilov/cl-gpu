@@ -6,6 +6,8 @@
 
 (in-package :cl-gpu)
 
+;;; Target selection
+
 (defvar *%cur-gpu-target* nil)
 
 (declaim (inline cur-gpu-target))
@@ -33,6 +35,8 @@
 
 (def macro find-gpu-module (name)
   `(gethash ,name *named-gpu-modules*))
+
+;;; Module object classes
 
 (def class* gpu-variable ()
   ((name           :documentation "Lisp name of the variable")
@@ -93,7 +97,7 @@
    (arguments      :documentation "List of arguments")
    (form           :documentation "Walker form tree for the code.")
    (body           :documentation "Body string")
-   (unique-name-tbl (make-hash-table :test #'equal)
+   (unique-name-tbl (make-c-name-table)
                     :documentation "A hash table used to generate unique C ids."))
   (:documentation "A function usable on the GPU"))
 
@@ -111,7 +115,7 @@
    (kernels         :documentation "List of kernel functions")
    (index-table     :documentation "An index assignment table")
    (compiled-code   :documentation "Code string")
-   (unique-name-tbl (make-hash-table :test #'equal)
+   (unique-name-tbl (make-c-name-table)
                     :documentation "A hash table used to generate unique C ids.")
    (change-sentinel (cons t nil)
                     :documentation "Used to trigger module reloads"))

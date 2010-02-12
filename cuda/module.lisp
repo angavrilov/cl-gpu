@@ -8,6 +8,9 @@
 
 (deflayer cuda-target (gpu-target))
 
+(def reserved-c-names
+    "__device__" "__constant__" "__shared__" "__global__")
+
 (def macro with-cuda-target (&body code)
   `(with-active-layers (cuda-target) ,@code))
 

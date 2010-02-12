@@ -6,36 +6,6 @@
 
 (in-package :cl-gpu)
 
-(def function symbol-to-c-name (name)
-  "Converts the symbol name to a suitable C identifier."
-  (coerce (loop
-             for char across (string-downcase (symbol-name name))
-             and prev-char = nil then char
-             ;; Can't begin with a number
-             when (and (digit-char-p char) (null prev-char))
-               collect #\N
-             ;; Alphanumeric: verbatim
-             if (alphanumericp char) collect char
-             ;; Dash to underscore, and don't repeat
-             else if (member char '(#\_ #\-))
-               when (not (eql prev-char #\_))
-                 collect (setf char #\_)
-               end
-             ;; Others: use the code
-             else append (coerce (format nil "U~X" (char-code char)) 'list))
-          'string))
-
-(def function unique-c-name (name table)
-  "Makes a unique C name using the table for duplicate avoidance."
-  (labels ((handle (name)
-             (if (gethash name table)
-                 (handle (format nil "~AX~A" name
-                                 (incf (gethash name table))))
-                 (progn
-                   (setf (gethash name table) 0)
-                   name))))
-    (handle (symbol-to-c-name name))))
-
 (def function parse-atomic-type (type-spec)
   (or (lisp-to-foreign-type type-spec)
       (error "Unknown atomic type: ~S" type-spec)))
