@@ -13,6 +13,13 @@
                  namelist)
      ,@code))
 
+(def function layered-method-qualifiers (options)
+  (flatten (list
+            (awhen (or (getf options :in-layer)
+                       (getf options :in))
+              (list :in it))
+            (getf options :mode))))
+
 (defun remove-keys (list &rest keys)
   (loop for (key value) on list by #'cddr
      unless (member key keys)

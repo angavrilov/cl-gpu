@@ -247,3 +247,174 @@
             (mapcar #'generate-c-code functions)
             (mapcar #'generate-c-code kernels))))
 
+;;; Code forms
+
+(defparameter *c-code-indent* 2)
+(defparameter *c-code-indent-step* 2)
+
+(def function emit-code-newline (stream)
+  (format stream "~&~v,0T" *c-code-indent*))
+
+(def macro with-indented-c-code (&body code)
+  `(let ((*c-code-indent* (+ *c-code-indent* *c-code-indent-step*)))
+     ,@code))
+
+(def layered-function emit-c-code (form stream &key))
+
+(def layered-function emit-call-c-code (name form stream &key)
+  (:method (name form stream &key)
+    (declare (ignore stream))
+    (error "Unsupported function: ~A in ~S" name (unwalk-form form))))
+
+(def layered-function emit-assn-c-code (name form stream &key)
+  (:method (name form stream &key)
+    (declare (ignore stream))
+    (error "Unsupported l-value function: ~A in ~S" name (unwalk-form form))))
+
+(def definer c-code-emitter (name args &body code)
+  (let ((assn? nil))
+    (when (consp name)
+      (assert (eql (first name) 'setf))
+      (setf assn? t name (second name)))
+    (multiple-value-bind (rq opt rest kwd other aux)
+        (parse-ordinary-lambda-list args)
+      (when (or kwd other)
+        (error "Keyword matching not supported in c-code-emitter"))
+      `(def layered-method ,(if assn?
+                                'emit-assn-c-code
+                                'emit-call-c-code)
+         ,@(layered-method-qualifiers -options-)
+         ((-name- (eql ',name)) -form- -stream- &key)
+         (macrolet ((emit (format &rest args)
+                      `(format -stream- ,format ,@args))
+                    (recurse (form &rest args)
+                      `(emit-c-code ,form -stream- ,@args)))
+           (let ((-arguments- (arguments-of -form-))
+                 ,@(if assn?
+                       `((-value- (value-of -form-)))))
+             (destructuring-bind (,@rq ,@(if opt `(&optional ,@opt))
+                                       ,@(if rest `(&rest ,rest))
+                                       ,@(if aux `(&aux ,@aux)))
+                 -arguments-
+               ,@code)))))))
+
+(def layered-methods emit-c-code
+  ;; Delegate function calls
+  (:method ((form free-application-form) stream &key)
+    (emit-call-c-code (operator-of form) form stream))
+
+  (:method ((form setf-application-form) stream &key)
+    (emit-assn-c-code (operator-of form) form stream))
+
+  ;; Constants
+
+  (:method ((form constant-form) stream &key)
+    (atypecase (value-of form)
+      (integer      (format stream "~A" it))
+      (single-float (format stream "~Af" it))
+      (double-float (format stream "~Ad" it))
+      (t (error "Cannot use constant ~S in C code." it))))
+  
+  ;; Assignment
+  (:method ((form setq-form) stream &key)
+    (let ((gpu-var (ensure-gpu-var (variable-of form))))
+      (princ (generate-var-ref gpu-var) stream))
+    (princ " = " stream)
+    (emit-c-code (value-of form) stream))
+
+  (:method ((form walked-lexical-variable-reference-form) stream &key)
+    (let ((gpu-var (ensure-gpu-var form)))
+      (princ (generate-var-ref gpu-var) stream)))
+
+  ;; Verbatim inline code
+  (:method ((form verbatim-code-form) stream &key)
+    (let ((flags nil))
+      (flet ((recurse (obj)
+               (emit-c-code obj stream)
+               (setf flags nil)))
+        (dolist (item (body-of form))
+          (typecase item
+            (constant-form
+             (atypecase (value-of item)
+               (string  (princ it stream))
+               (keyword (push it flags))
+               (t (recurse item))))
+            (t (recurse item)))))))
+
+  ;; Program block
+  (:method ((form implicit-progn-mixin) stream &key)
+    (dolist (item (body-of form))
+      (emit-code-newline stream)
+      (emit-c-code item stream)
+      (princ ";" stream)))
+
+  (:method ((form progn-form) stream &key)
+    (princ "{" stream)
+    (with-indented-c-code
+      (call-next-method))
+    (emit-code-newline stream)
+    (princ "}" stream))
+
+  (:method ((form expr-progn-form) stream &key)
+    (princ "(" stream)
+    (with-indented-c-code
+      (emit-code-newline stream)
+      (loop
+         for i from 0
+         for item in (body-of form)
+         when (> i 0)
+         do (progn
+              (princ "," stream)
+              (emit-code-newline stream))
+         do (emit-c-code item stream))
+      (emit-code-newline stream))
+    (princ ")" stream))
+  )
+
+(def c-code-emitter raw-aref (var index)
+  (let ((gpu-var (ensure-gpu-var var)))
+    (emit "~A[" (generate-var-ref gpu-var))
+    (recurse index)
+    (emit "]")))
+
+(def c-code-emitter (setf raw-aref) (var index)
+  (let ((gpu-var (ensure-gpu-var var)))
+    (emit "~A[" (generate-var-ref gpu-var))
+    (recurse index)
+    (emit "] = ")
+    (recurse -value-)))
+
+(def function emit-aref-core (var indexes stream)
+  (let* ((gpu-var (ensure-gpu-var var))
+         (rank (length (dimension-mask-of gpu-var))))
+    (assert (= (length indexes) rank))
+    (format stream "~A[" (generate-var-ref gpu-var))
+    (loop for i from 0 and idx in indexes
+       when (> i 0) do
+         (princ "+" stream)
+       do (emit-c-code idx stream)
+       when (< i (1- rank)) do
+         (format stream "*~A" (generate-array-stride gpu-var i)))
+    (princ "]" stream)))
+
+(def c-code-emitter aref (var &rest indexes)
+  (emit-aref-core var indexes -stream-))
+
+(def c-code-emitter (setf aref) (var &rest indexes)
+  (emit-aref-core var indexes -stream-)
+  (emit " = ")
+  (recurse -value-))
+
+(def c-code-emitter array-total-size (var)
+  (emit "~A" (generate-array-size (ensure-gpu-var var))))
+
+(def c-code-emitter array-raw-extent (var)
+  (emit "~A" (generate-array-extent (ensure-gpu-var var))))
+
+(def c-code-emitter array-dimension (var dimidx)
+  (emit "~A" (generate-array-dim (ensure-gpu-var var)
+                                 (ensure-constant dimidx))))
+
+(def c-code-emitter array-raw-stride (var dimidx)
+  (emit "~A" (generate-array-stride (ensure-gpu-var var)
+                                    (ensure-constant dimidx))))

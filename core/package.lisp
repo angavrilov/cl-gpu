@@ -22,6 +22,10 @@
         :metabang-bind
         :hu.dwim.walker)
 
+  (:import-from #:hu.dwim.walker
+                #:recurse #:recurse-on-body #:variable #:value
+                #:augment-walk-environment)
+
   (:export #:cuda-driver-error #:buffer
            #:int8 #:int16 #:int32 #:int64
            #:uint8 #:uint16 #:uint32 #:uint64

@@ -126,48 +126,36 @@
 
 (def test test/cuda-driver/cuda-module-args ()
   (with-fixture cuda-context
-    (let* ((kernel (make-instance 'cl-gpu::gpu-kernel :name 'foo :c-name "fooK" :index 4
-                                  :arguments
-                                  (list (make-instance 'cl-gpu::gpu-argument
-                                                       :name 'foo :c-name "Afoo"
-                                                       :item-type :float :dimension-mask nil)
-                                        (make-instance 'cl-gpu::gpu-argument
-                                                       :name 'bar :c-name "Abar"
-                                                       :item-type :float :dimension-mask #(2 nil 4)
-                                                       :include-size? t :include-extent? t
-                                                       :included-dims #(nil t nil)
-                                                       :included-strides #(t t))
-                                        (make-instance 'cl-gpu::gpu-argument
-                                                       :name 'baz :c-name "Abaz"
-                                                       :item-type :float :dimension-mask #(2 6 4)))
-                                  :body "buf[0] = (unsigned)Abar; buf[1] = Abar__D; buf[2] = Abar__D1;
- buf[3] = Abar__X; buf[4] = Abar__S0; buf[5] = Abar__S1;
- buf[6] = (unsigned)Abaz;"))
-           (module (make-instance 'cl-gpu::gpu-module :name nil
-                                  :globals (list (make-instance 'cl-gpu::gpu-global-var
-                                                                :name 'foo :c-name "foo" :index 0
-                                                                :item-type :float :dimension-mask nil)
-                                                 (make-instance 'cl-gpu::gpu-global-var
-                                                                :name 'bar :c-name "bar" :index 1
-                                                                :item-type :float :dimension-mask #(2 nil 4))
-                                                 (make-instance 'cl-gpu::gpu-global-var
-                                                                :name 'baz :c-name "baz" :index 2
-                                                                :item-type :float :dimension-mask #(2 6 4))
-                                                 (make-instance 'cl-gpu::gpu-global-var
-                                                                :name 'buf :c-name "buf" :index 5
-                                                                :item-type :uint32 :dimension-mask #(7)))
-                                  :functions nil
-                                  :kernels (list kernel))))
+    (let ((module (cl-gpu::parse-gpu-module-spec
+                   `((:global foo single-float)
+                     (:global bar (array single-float (2 * 4)))
+                     (:global baz (array single-float (2 6 4)))
+                     (:global buf (vector uint32 7))
+                     (:kernel foo (foo bar baz)
+                       (declare (type single-float foo)
+                                (type (array single-float (2 * 4)) bar)
+                                (type (array single-float (2 6 4)) baz))
+                       (setf (aref buf 0) (gpu::inline-verbatim (:uint32)
+                                            "(unsigned)" bar)
+                             (aref buf 1) (array-total-size bar)
+                             (aref buf 2) (array-dimension bar 1)
+                             (aref buf 3) (array-raw-extent bar)
+                             (aref buf 4) (array-raw-stride bar 0)
+                             (aref buf 5) (array-raw-stride bar 1)
+                             (aref buf 6) (gpu::inline-verbatim (:uint32)
+                                            "(unsigned)" baz)
+                             (aref bar 1 1 1) foo))))))
       (cl-gpu::compile-gpu-module module)
       (let* ((instance (cl-gpu::get-module-instance module))
              (items (cl-gpu::gpu-module-instance-item-vector instance))
              (baz (cl-gpu::gpu-global-value (aref items 2)))
              (kernel (aref items 4))
-             (result (cl-gpu::gpu-global-value (aref items 5)))
+             (result (cl-gpu::gpu-global-value (aref items 3)))
              (ptr (cl-gpu::cuda-linear-handle (slot-value baz 'cl-gpu::blk))))
         (is (zero-buffer? result))
         (funcall kernel 0.5 baz baz)
         (is (every #'=
                    (buffer-as-array result)
-                   (list ptr 48 6 48 24 4 ptr)))))))
+                   (list ptr 48 6 48 24 4 ptr)))
+        (is (= (bref baz 1 1 1) 0.5))))))
 

@@ -6,7 +6,7 @@
 
 (in-package :cl-gpu)
 
-(deflayer cuda-target)
+(deflayer cuda-target (gpu-target))
 
 (def macro with-cuda-target (&body code)
   `(with-active-layers (cuda-target) ,@code))
@@ -330,6 +330,15 @@
   ;; Verify the context early
   (with-cuda-context ((cuda-module-context (cuda-module-instance-handle instance)))
     (call-next-method)))
+
+(def layered-method compile-object :in cuda-target ((function gpu-function))
+  (unless (and (slot-boundp function 'body)
+               (body-of function))
+    (setf (body-of function)
+          (with-output-to-string (stream)
+            (emit-c-code (form-of function) stream)))
+    (dolist (arg (arguments-of function))
+      (setf (includes-locked? arg) t))))
 
 (def layered-method compile-object :in cuda-target ((module gpu-module))
   (setf (compiled-code-of module)

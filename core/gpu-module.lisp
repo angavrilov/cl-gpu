@@ -61,7 +61,8 @@
 (def class* gpu-global-var (gpu-variable)
   ((index          :documentation "Ordinal index for fast access.")
    (constant-var?  nil :accessor constant-var? :type boolean
-                   :documentation "Specifies allocation in constant memory."))
+                   :documentation "Specifies allocation in constant memory.")
+   (form           :documentation "Global var binding form for this var."))
   (:documentation "A global variable in a GPU module."))
 
 (def class* gpu-argument (gpu-variable)
@@ -90,8 +91,10 @@
    (c-name         :documentation "C name of the function")
    (return-type    :documentation "Return type")
    (arguments      :documentation "List of arguments")
-   (body           ""
-                   :documentation "Body tree"))
+   (form           :documentation "Walker form tree for the code.")
+   (body           :documentation "Body string")
+   (unique-name-tbl (make-hash-table :test #'equal)
+                    :documentation "A hash table used to generate unique C ids."))
   (:documentation "A function usable on the GPU"))
 
 (def class* gpu-kernel (gpu-function)
