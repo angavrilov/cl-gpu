@@ -20,11 +20,6 @@
               (list :in it))
             (getf options :mode))))
 
-(defun remove-keys (list &rest keys)
-  (loop for (key value) on list by #'cddr
-     unless (member key keys)
-     collect key and collect value))
-
 (def function open-temp-file (base-name &key
                                         (direction :output)
                                         (element-type 'character)

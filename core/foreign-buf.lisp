@@ -99,7 +99,8 @@
           (apply #'call-next-method buffer
                  :byte-offset byte-offset :foreign-type foreign-type
                  :size new-size :dimensions dims
-                 (remove-keys flags :offset :byte-offset :element-type :foreign-type :size :dimensions)))))))
+                 (remove-from-plist flags :offset :byte-offset :element-type
+                                    :foreign-type :size :dimensions)))))))
 
 (def method buffer-displacement ((buffer abstract-foreign-buffer))
   (with-slots (displaced-to log-offset) buffer
