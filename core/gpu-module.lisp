@@ -74,7 +74,9 @@
    (include-size?    nil :accessor include-size? :type boolean)
    (included-dims    nil :documentation "Mask of dimensions to append.")
    (include-extent?  nil :accessor include-extent? :type boolean)
-   (included-strides nil :documentation "Mask of strides to append."))
+   (included-strides nil :documentation "Mask of strides to append.")
+   (keyword          nil :documentation "If set, specifies a keyword parameter.")
+   (default-value    nil :documentation "Form to evaluate"))
   (:documentation "A GPU function or kernel parameter."))
 
 (def method initialize-instance :after ((obj gpu-argument) &key &allow-other-keys)

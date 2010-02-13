@@ -272,7 +272,15 @@
   (multiple-value-bind (args arg-size)
       (compute-field-layout obj 0)
     (with-unique-names (kernel fobj fhandle bx by bz gx gy)
-      (let* ((arg-names (mapcar #'name-of (arguments-of obj)))
+      (bind (((:values rq-arg-names key-arg-specs aux-arg-specs)
+              (loop for arg in (arguments-of obj)
+                 if (keyword-of arg)
+                 collect `((,(keyword-of arg) ,(name-of arg))
+                           ,(default-value-of arg)) into kwd
+                 else if (default-value-of arg)
+                 collect `(,(name-of arg) ,(default-value-of arg)) into aux
+                 else collect (name-of arg) into rq
+                 finally (return (values rq kwd aux))))
              (arg-setters
               (mapcar (lambda (arg)
                         (destructuring-bind (obj offset size) arg
@@ -283,9 +291,10 @@
            (declare (type cuda-kernel ,kernel))
            (let ((,fobj (fun-obj-of ,kernel)))
              (declare (type cuda-function ,fobj))
-             (lambda (,@arg-names &key
+             (lambda (,@rq-arg-names &key
                  ((:block-x ,bx) 1) ((:block-y ,by) 1) ((:block-z ,bz) 1)
-                 ((:grid-x ,gx) 1) ((:grid-y ,gy) 1))
+                 ((:grid-x ,gx) 1) ((:grid-y ,gy) 1) ,@key-arg-specs
+                 ,@(if aux-arg-specs `(&aux ,@aux-arg-specs)))
                (let* ((,fhandle (cuda-function-ensure-handle ,fobj)))
                  (with-cuda-context ((cuda-function-context ,fobj))
                    ,@arg-setters

@@ -127,6 +127,9 @@
         (is (eq bar-val nil))
         (is (zero-buffer? (cl-gpu::buffer-of bar-var)))))))
 
+(declaim (type single-float *test-global-val*))
+(defparameter *test-global-val* 0.7)
+
 (def test test/cuda-driver/cuda-module-args ()
   (with-fixture cuda-context
     (let ((module (cl-gpu::parse-gpu-module-spec
@@ -134,7 +137,7 @@
                      (:global bar test-array)
                      (:global baz (test-array 6))
                      (:global buf (vector uint32 7))
-                     (:kernel foo (foo bar baz)
+                     (:kernel foo (foo bar &key baz)
                        (declare (type single-float foo)
                                 (type test-array bar)
                                 (type (test-array 6) baz))
@@ -147,7 +150,8 @@
                              (aref buf 5) (array-raw-stride bar 1)
                              (aref buf 6) (gpu::inline-verbatim (:uint32)
                                             "(unsigned)" baz)
-                             (aref bar 1 1 1) foo))))))
+                             (aref bar 1 1 1) (gpu::inline-verbatim (:float)
+                                                foo "+" *test-global-val*)))))))
       (cl-gpu::compile-gpu-module module)
       (let* ((instance (cl-gpu::get-module-instance module))
              (items (cl-gpu::gpu-module-instance-item-vector instance))
@@ -156,9 +160,9 @@
              (result (cl-gpu::gpu-global-value (aref items 3)))
              (ptr (cl-gpu::cuda-linear-handle (slot-value baz 'cl-gpu::blk))))
         (is (zero-buffer? result))
-        (funcall kernel 0.5 baz baz)
+        (funcall kernel 0.5 baz :baz baz)
         (is (every #'=
                    (buffer-as-array result)
                    (list ptr 48 6 48 24 4 ptr)))
-        (is (= (bref baz 1 1 1) 0.5))))))
+        (is (= (bref baz 1 1 1) 1.2))))))
 

@@ -34,6 +34,9 @@
 (def form-attribute-accessor result-type)
 (def form-attribute-accessor gpu-variable
   :type (or gpu-variable null) :forms name-definition-form)
+(def form-attribute-accessor assigned-to?
+  :type boolean :forms (lexical-variable-binding-form
+                        function-argument-form))
 
 ;; A wrapper for global variables
 
@@ -111,3 +114,78 @@
   (unless (typep obj 'constant-form)
     (error "Must be a constant: ~S" (unwalk-form obj)))
   (value-of obj))
+
+(def function unknown-type? (type)
+  (or (null type)
+      (eql type t)))
+
+(def function pull-global-refs (tree)
+  "Convert all special refs to &aux arguments."
+  (with-accessors ((top-args arguments-of)
+                   (top-decls declarations-of)) tree
+    (let ((arg-cache nil))
+      (flet ((close-special-var (form)
+               (let ((arg-def
+                      (or (cdr (assoc (name-of form) arg-cache))
+                          ;; Add a new aux argument
+                          (let ((name (name-of form))
+                                (type (or (declared-type-of form) t)))
+                            ;; Use type declarations from top level
+                            (awhen (find-form-by-name name top-decls
+                                                      :type 'type-declaration-form)
+                              (unless (subtypep (declared-type-of it) type)
+                                (error "Bad type specialization of ~S: ~S is not subtype of ~S"
+                                       name (declared-type-of it) type))
+                              (setf type (declared-type-of it)))
+                            ;; Use type declarations via (the ... *foo*)
+                            (when (and (unknown-type? type)
+                                       (typep (parent-of form) 'the-form))
+                              (setf type (declared-type-of (parent-of form))))
+                            ;; Assert that the type is known
+                            (when (unknown-type? type)
+                              (error "Unknown global variable type: ~S" name))
+                            ;; Create the argument
+                            (let* ((new-id (make-symbol (string name)))
+                                   (arg (with-form-object (arg 'auxiliary-function-argument-form tree
+                                                               :name new-id :usages nil)
+                                          (setf (default-value-of arg)
+                                                (walk-form `(locally (declare (special ,name))
+                                                              ,name)
+                                                           :parent arg)))))
+                              (nconcf top-args (list arg))
+                              (push (cons name arg) arg-cache)
+                              (with-form-object (decl 'type-declaration-form tree
+                                                      :name new-id :declared-type type)
+                                (nconcf top-decls (list decl)))
+                              arg)))))
+                 (change-class form 'walked-lexical-variable-reference-form
+                               :name (name-of arg-def) :definition arg-def)
+                 (push form (usages-of arg-def))
+                 nil)))
+        (map-ast (lambda (form)
+                   (if (member form top-args)
+                       nil ; Don't process top args to avoid cycles
+                       (typecase form
+                         (special-variable-reference-form
+                          (close-special-var form))
+                         (unwalked-lexical-variable-reference-form
+                          (error "Closing over lexical variables is not supported: ~S"
+                                 (unwalk-form form)))
+                         (lexical-variable-binding-form
+                          (when (special-binding? form)
+                            (error "Binding special variables is not supported: ~S"
+                                   (unwalk-form form)))
+                          form)
+                         (setq-form
+                          (unless (typep (variable-of form) 'walked-lexical-variable-reference-form)
+                            (error "Setting non-lexical variables is not supported: ~S"
+                                   (unwalk-form form)))
+                          form)
+                         (t form))))
+                 tree)))))
+
+(def function preprocess-tree (tree global-vars)
+  (annotate-binding-usage (list* tree
+                                 (mapcar #'form-of global-vars)))
+  (pull-global-refs tree)
+  tree)

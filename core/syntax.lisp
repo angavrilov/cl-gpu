@@ -58,7 +58,7 @@
 (def function extract-arglist-vars (lambda-form &key func-name id-table kernel?)
   (let ((top-decls (declarations-of lambda-form))
         (title (if kernel? "kernel" "gpu function")))
-    (flet ((extract-arg (aform)
+    (flet ((extract-arg (aform &key keyword default-value)
              (let* ((aname (name-of aform))
                     (adecl (find-form-by-name aname top-decls
                                               :type 'type-declaration-form)))
@@ -70,7 +70,10 @@
                  (aprog1 (make-instance 'gpu-argument
                                         :name aname
                                         :c-name (unique-c-name aname id-table)
-                                        :item-type item-type :dimension-mask dims)
+                                        :item-type item-type :dimension-mask dims
+                                        :keyword keyword
+                                        :default-value (if default-value
+                                                           (unwalk-form default-value)))
                    (setf (gpu-variable-of aform) it))))))
       (mapcar (lambda (aform)
                 (etypecase aform
@@ -81,15 +84,28 @@
                   (rest-function-argument-form
                    (error "Rest arguments are not allowed for ~As." title))
                   (keyword-function-argument-form
-                   (error "Keyword arguments are not allowed for ~As." title))
+                   (unless kernel?
+                     (error "Keyword arguments are not allowed for ~As." title))
+                   (when (supplied-p-parameter-name-of aform)
+                     (error "Supplied flags are not allowed for ~As." title))
+                   (extract-arg aform
+                                :keyword (effective-keyword-name-of aform)
+                                :default-value (default-value-of aform)))
                   (allow-other-keys-function-argument-form
                    (error "Allow other keys is not allowed for ~As." title))
                   (auxiliary-function-argument-form
-                   (error "Auxillary arguments are not allowed for ~As." title))))
+                   (unless kernel?
+                     (error "Auxillary arguments are not allowed for ~As." title))
+                   (unless (default-value-of aform)
+                     (error "Auxillary arguments must have a default value: ~S"
+                            (unwalk-form aform)))
+                   (extract-arg aform :default-value (default-value-of aform)))))
               (arguments-of lambda-form)))))
 
-(def function parse-kernel (code &key env id-table)
-  (let* ((form  (walk-form `(defun ,@code) :environment env))
+(def function parse-kernel (code &key env id-table globals)
+  (let* ((form  (preprocess-tree
+                 (walk-form `(defun ,@code) :environment env)
+                 globals))
          (name (name-of form))
          (c-name (unique-c-name name id-table))
          (fid-table (copy-hash-table id-table :test #'equal))
@@ -151,7 +167,8 @@
           (dolist (item spec)
             (case (first item)
               ((:kernel)
-               (push (parse-kernel (rest item) :env kernel-env :id-table id-table)
+               (push (parse-kernel (rest item) :env kernel-env :id-table id-table
+                                   :globals var-list)
                      kernel-list))))))
       (make-instance 'gpu-module :name name
                      :unique-name-tbl id-table
