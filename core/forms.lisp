@@ -31,7 +31,7 @@
 
 ;; Some ad-hoc attribute definitions
 
-(def form-attribute-accessor result-type)
+(def form-attribute-accessor form-c-type)
 (def form-attribute-accessor gpu-variable
   :type (or gpu-variable null) :forms name-definition-form)
 (def form-attribute-accessor assigned-to?
@@ -47,6 +47,21 @@
 
 (def (form-class :export nil) expr-progn-form (progn-form)
   ())
+
+;; Forced cast
+
+(def (macro e) cast (type body)
+  `(the ,type ,body))
+
+(def (form-class :export nil) cast-form (the-form)
+  ())
+
+(def (walker-method :in gpu-target) cast
+  (with-form-object (cast 'cast-form -parent- :declared-type (second -form-))
+    (setf (value-of cast) (recurse (third -form-) cast))))
+
+(def unwalker cast-form (value)
+  `(cast ,(declared-type-of -form-) ,(recurse value)))
 
 ;; A SETF form.
 
@@ -86,17 +101,17 @@
   (error "This form cannot be used in ordinary lisp code: ~S" full))
 
 (def (form-class :export nil) verbatim-code-form (implicit-progn-mixin)
-  ((result-type)))
+  ((form-c-type)))
 
 (def (walker-method :in gpu-target) inline-verbatim
   (destructuring-bind ((ret-type) &rest code) (rest -form-)
     (with-form-object (vcode 'verbatim-code-form -parent-
-                             :result-type ret-type)
+                             :form-c-type ret-type)
       (setf (body-of vcode)
             (mapcar (lambda (form) (recurse form vcode)) code)))))
 
-(def unwalker verbatim-code-form (result-type)
-  `(inline-verbatim (,result-type)
+(def unwalker verbatim-code-form (form-c-type)
+  `(inline-verbatim (,form-c-type)
      ,@(recurse-on-body (body-of -form-))))
 
 ;;;
@@ -114,6 +129,11 @@
   (unless (typep obj 'constant-form)
     (error "Must be a constant: ~S" (unwalk-form obj)))
   (value-of obj))
+
+(def function ensure-int-constant (obj)
+  (aprog1 (ensure-constant obj)
+    (unless (typep it 'integer)
+      (error "Must be an integer constant: ~S" it))))
 
 (def function unknown-type? (type)
   (or (null type)

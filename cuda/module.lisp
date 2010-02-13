@@ -346,6 +346,7 @@
 (def layered-method compile-object :in cuda-target ((function gpu-function))
   (unless (and (slot-boundp function 'body)
                (body-of function))
+    (propagate-c-types (form-of function) :upper-type :void)
     (setf (body-of function)
           (with-output-to-string (stream)
             (emit-c-code (form-of function) stream)))

@@ -40,56 +40,6 @@
 (def layered-function generate-invoker-form (obj)
   (:documentation "Creates a lambda form to invoke the kernel."))
 
-;; Misc
-
-(def layered-function c-type-string (type)
-  (:documentation "Return a string that represents the type in C")
-  (:method (type)
-    (ecase type
-      (:void "void")
-      (:float "float")
-      (:double "double")
-      (:uint8 "unsigned char")
-      (:int8 "char")
-      (:uint16 "unsigned short")
-      (:int16 "short")
-      (:uint32 "unsigned int")
-      (:int32 "int"))))
-
-(def layered-function c-type-size (type)
-  (:documentation "Return the size of the type in bytes")
-  (:method (type)
-    (ecase type
-      (:float 4)
-      (:double 8)
-      (:uint8 1)
-      (:int8 1)
-      (:uint16 2)
-      (:int16 2)
-      (:uint32 4)
-      (:int32 4))))
-
-(def layered-function c-type-alignment (type)
-  (:documentation "Return the alignment requirement of the type in bytes")
-  (:method (type)
-    (ecase type
-      (:float 4)
-      (:double 8)
-      (:uint8 1)
-      (:int8 1)
-      (:uint16 2)
-      (:int16 2)
-      (:uint32 4)
-      (:int32 4))))
-
-(def (function i) align-offset (offset alignment)
-  (logand (+ offset alignment -1) (lognot (1- alignment))))
-
-(def (function i) align-for-type (offset type)
-  (align-offset offset (c-type-alignment type)))
-
-(define-modify-macro align-for-typef (type) align-for-type)
-
 ;;; Global variables
 
 (def layered-method generate-c-code ((var gpu-global-var))
@@ -272,31 +222,16 @@
     (error "Unsupported l-value function: ~A in ~S" name (unwalk-form form))))
 
 (def definer c-code-emitter (name args &body code)
-  (let ((assn? nil))
-    (when (consp name)
-      (assert (eql (first name) 'setf))
-      (setf assn? t name (second name)))
-    (multiple-value-bind (rq opt rest kwd other aux)
-        (parse-ordinary-lambda-list args)
-      (when (or kwd other)
-        (error "Keyword matching not supported in c-code-emitter"))
-      `(def layered-method ,(if assn?
-                                'emit-assn-c-code
-                                'emit-call-c-code)
-         ,@(layered-method-qualifiers -options-)
-         ((-name- (eql ',name)) -form- -stream- &key)
-         (macrolet ((emit (format &rest args)
-                      `(format -stream- ,format ,@args))
-                    (recurse (form &rest args)
-                      `(emit-c-code ,form -stream- ,@args)))
-           (let ((-arguments- (arguments-of -form-))
-                 ,@(if assn?
-                       `((-value- (value-of -form-)))))
-             (destructuring-bind (,@rq ,@(if opt `(&optional ,@opt))
-                                       ,@(if rest `(&rest ,rest))
-                                       ,@(if aux `(&aux ,@aux)))
-                 -arguments-
-               ,@code)))))))
+  (make-builtin-handler-method
+   ;; Builtin prototype + method name
+   name args (if assn? 'emit-assn-c-code 'emit-call-c-code)
+   ;; Body
+   code
+   :method-args `(-stream- &key)
+   :prefix `(macrolet ((emit (format &rest args)
+                         `(format -stream- ,format ,@args))
+                       (recurse (form &rest args)
+                         `(emit-c-code ,form -stream- ,@args))))))
 
 (def layered-methods emit-c-code
   ;; Delegate function calls
@@ -309,12 +244,18 @@
   ;; Constants
 
   (:method ((form constant-form) stream &key)
-    (atypecase (value-of form)
-      (integer      (format stream "~A" it))
-      (single-float (format stream "~Af" it))
-      (double-float (format stream "~Ad" it))
-      (t (error "Cannot use constant ~S in C code." it))))
-  
+    (let ((value (value-of form))
+          (type (form-c-type-of form)))
+      (ecase type
+        ((:int32 :double)
+         (format stream "~A" value))
+        ((:float)
+         (format stream "~Af" value))
+        ((:uint32)
+         (format stream "~AU" value))
+        ((:int8 :uint8 :int16 :uint16)
+         (format stream "((~A)~A)" (c-type-string type) value)))))
+
   ;; Assignment
   (:method ((form setq-form) stream &key)
     (let ((gpu-var (ensure-gpu-var (variable-of form))))
@@ -337,6 +278,10 @@
             (constant-form
              (atypecase (value-of item)
                (string  (princ it stream))
+               (character
+                (if (eql it #\Newline)
+                    (emit-code-newline stream)
+                    (princ it stream)))
                (keyword (push it flags))
                (t (recurse item))))
             (t (recurse item)))))))

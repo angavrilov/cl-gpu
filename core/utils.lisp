@@ -22,6 +22,36 @@
               (list :in it))
             (getf options :mode))))
 
+(def macro make-builtin-handler-method (builtin-name
+                                        builtin-args
+                                        method-name-selector
+                                        body-forms
+                                        &key method-args top-decls prefix)
+  "Non-hygienic helper for stuff like c-code-emitter.
+Defines variables: assn? rq-args opt-args rest-arg aux-args."
+  `(let ((assn? nil))
+     (when (consp ,builtin-name)
+       (assert (eql (first ,builtin-name) 'setf))
+       (setf assn? t ,builtin-name (second ,builtin-name)))
+     (multiple-value-bind (rq-args opt-args rest-arg kwd other aux-args)
+         (parse-ordinary-lambda-list ,builtin-args)
+       (when (or kwd other)
+         (error "Keyword matching not supported"))
+       `(def layered-method ,,method-name-selector
+          ,@(layered-method-qualifiers -options-)
+          ((-name- (eql ',,builtin-name)) -form- ,@,method-args)
+          ,@,(if top-decls ``((declare ,@,top-decls)))
+          (let* ((-arguments- (arguments-of -form-))
+                 ,@(if assn?
+                       `((-value- (value-of -form-)))))
+            (,@,(or prefix ''(progn))
+              (destructuring-bind (,@rq-args
+                                   ,@(if opt-args `(&optional ,@opt-args))
+                                   ,@(if rest-arg `(&rest ,rest-arg))
+                                   ,@(if aux-args `(&aux ,@aux-args)))
+                  -arguments-
+                ,@,body-forms)))))))
+
 ;;; Temporary files
 
 (def function open-temp-file (base-name &key

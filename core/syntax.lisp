@@ -6,55 +6,6 @@
 
 (in-package :cl-gpu)
 
-(def generic expand-gpu-type (name args)
-  (:documentation "Expands type aliases defined through gpu-type.")
-  (:method ((name t) args)
-    (declare (ignore name args))
-    (values)))
-
-(def (definer e :available-flags "e") gpu-type (name args &body code)
-  ;; Does a deftype that is available to GPU code
-  `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (defmethod expand-gpu-type ((name (eql ',name)) args)
-       (values (block ,name
-                 (destructuring-bind ,args args
-                   ,@code))
-               t))
-     ,@(if (null (getf -options- :gpu-only))
-           `((def (type :export ,(getf -options- :export)) ,name ,args
-               ,@code)))))
-
-(def function parse-atomic-type (type-spec)
-  (or (lisp-to-foreign-type type-spec)
-      (error "Unknown atomic type: ~S" type-spec)))
-
-(def function parse-global-type (type-spec)
-  (multiple-value-bind (rspec expanded?)
-      (expand-gpu-type (ensure-car type-spec)
-                       (if (consp type-spec) (cdr type-spec)))
-    (cond (expanded?
-           (parse-global-type rspec))
-          ((consp type-spec)
-           (ecase (first type-spec)
-             (array
-              (destructuring-bind (&optional item-type dim-spec) (rest type-spec)
-                (when (or (null item-type) (eql item-type '*)
-                          (null dim-spec) (eql dim-spec '*))
-                  (error "Insufficiently specific type spec: ~S" type-spec))
-                (values (parse-atomic-type item-type)
-                        (if (numberp dim-spec)
-                            (make-array dim-spec :initial-element nil)
-                            (coerce (mapcar (lambda (x) (if (numberp x) x nil)) dim-spec)
-                                    'vector)))))
-             (vector
-              (destructuring-bind (&optional item-type dim-spec) (rest type-spec)
-                (when (or (null item-type) (eql item-type '*))
-                  (error "Insufficiently specific type spec: ~S" type-spec))
-                (values (parse-atomic-type item-type)
-                        (if (numberp dim-spec) (vector dim-spec) (vector nil)))))))
-          (t
-           (parse-atomic-type type-spec)))))
-
 (def function extract-arglist-vars (lambda-form &key func-name id-table kernel?)
   (let ((top-decls (declarations-of lambda-form))
         (title (if kernel? "kernel" "gpu function")))
