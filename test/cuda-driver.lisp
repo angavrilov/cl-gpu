@@ -77,12 +77,15 @@
   (with-fixtures (cuda-context foreign-arrs)
     (test/buffers/copy *cuda-arr1* *foreign-arr2* *cuda-arr3* *foreign-arr4*)))
 
+(def gpu-type test-array (&optional (len '*))
+  `(array single-float (2 ,len 4)))
+
 (def test test/cuda-driver/cuda-module-vars ()
   (with-fixture cuda-context
     (let ((module (cl-gpu::parse-gpu-module-spec
                    '((:variable foo single-float)
-                     (:variable bar (array single-float (2 * 4)))
-                     (:variable baz (array single-float (2 6 4)))))))
+                     (:variable bar test-array)
+                     (:variable baz (test-array 6))))))
       (cl-gpu::compile-gpu-module module)
       (symbol-macrolet ((instance (cl-gpu::get-module-instance module))
                         (foo-var (aref (cl-gpu::gpu-module-instance-item-vector instance) 0))
@@ -128,13 +131,13 @@
   (with-fixture cuda-context
     (let ((module (cl-gpu::parse-gpu-module-spec
                    `((:global foo single-float)
-                     (:global bar (array single-float (2 * 4)))
-                     (:global baz (array single-float (2 6 4)))
+                     (:global bar test-array)
+                     (:global baz (test-array 6))
                      (:global buf (vector uint32 7))
                      (:kernel foo (foo bar baz)
                        (declare (type single-float foo)
-                                (type (array single-float (2 * 4)) bar)
-                                (type (array single-float (2 6 4)) baz))
+                                (type test-array bar)
+                                (type (test-array 6) baz))
                        (setf (aref buf 0) (gpu::inline-verbatim (:uint32)
                                             "(unsigned)" bar)
                              (aref buf 1) (array-total-size bar)
