@@ -131,3 +131,75 @@
   (emit "~A" (generate-array-stride (ensure-gpu-var var)
                                     (ensure-constant dimidx))))
 
+;;; Arithmetics
+
+(def function arithmetic-result-type (arg-types)
+  (cond ((member :double arg-types) :double)
+        ((member :float arg-types) :float)
+        ((member :uint64 arg-types) :uint64)
+        ((member :int64 arg-types) :int64)
+        ((member :uint32 arg-types) :uint32)
+        (t :int32)))
+
+(def function ensure-arithmetic-result (arg-types form &key prefix)
+  (aprog1 (arithmetic-result-type arg-types)
+    (dolist (arg arg-types)
+      (verify-cast arg it form :prefix prefix))))
+
+(def function splice-constant-arg (form value)
+  (with-form-object (const 'constant-form form :value value)
+    (push const (arguments-of form))))
+
+(def definer arithmetic-type-computer (name &key zero)
+  `(def type-computer ,name (&rest args)
+     (if args
+         (ensure-arithmetic-result args/type -form-)
+         (propagate-c-types (splice-constant-arg -form- ,zero)
+                            :upper-type -upper-type-))))
+
+(def arithmetic-type-computer + :zero 0)
+(def arithmetic-type-computer - :zero 0)
+(def arithmetic-type-computer * :zero 1)
+(def arithmetic-type-computer / :zero 1.0)
+
+(def type-computer 1+ (arg)
+  (ensure-arithmetic-result (list arg/type) -form-))
+
+(def type-computer 1- (arg)
+  (ensure-arithmetic-result (list arg/type) -form-))
+
+(def function emit-separated (stream args op &key (single-pfix ""))
+  (assert args)
+  (princ "(" stream)
+  (when (null (rest args))
+    (princ single-pfix stream))
+  (emit-c-code (first args) stream)
+  (dolist (arg (rest args))
+    (princ op stream)
+    (emit-c-code arg stream))
+  (princ ")" stream))
+
+(def c-code-emitter + (&rest args)
+  (emit-separated -stream- args "+"))
+
+(def c-code-emitter - (&rest args)
+  (emit-separated -stream- args "-" :single-pfix "-"))
+
+(def c-code-emitter * (&rest args)
+  (emit-separated -stream- args "*"))
+
+(def c-code-emitter / (&rest args)
+  (emit-separated -stream- args "/"
+                  :single-pfix
+                  (if (eq (form-c-type-of -form-) :double)
+                      "1.0/" "1.0f/")))
+
+(def c-code-emitter 1+ (arg)
+  (emit "(")
+  (recurse arg)
+  (emit "+1)"))
+
+(def c-code-emitter 1- (arg)
+  (emit "(")
+  (recurse arg)
+  (emit "-1)"))
