@@ -135,9 +135,13 @@
     (unless (typep it 'integer)
       (error "Must be an integer constant: ~S" it))))
 
+(def function nil-constant? (obj)
+  (and (typep obj 'constant-form)
+       (eq (value-of obj) nil)))
+
 (def function unknown-type? (type)
-  (or (null type)
-      (eql type t)))
+  (case type
+    ((nil t number real) t)))
 
 (def function pull-global-refs (tree)
   "Convert all special refs to &aux arguments."

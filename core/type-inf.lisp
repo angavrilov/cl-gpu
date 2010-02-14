@@ -55,6 +55,13 @@
           (t
            (parse-atomic-type type-spec)))))
 
+(def function parse-local-type (type-spec)
+  (if (unknown-type? type-spec)
+      nil
+      (multiple-value-bind (item dims)
+          (parse-global-type type-spec)
+        (if dims `(:pointer ,item) item))))
+
 ;;; Type properties
 
 (def layered-function c-type-string (type)
@@ -68,6 +75,7 @@
     (ecase type
       (:void "void")
       (:pointer "void*")
+      (:boolean "int")
       (:float "float")
       (:double "double")
       (:uint8 "unsigned char")
@@ -84,6 +92,7 @@
       (:pointer (c-type-size :pointer))))
   (:method (type)
     (ecase type
+      (:boolean 4)
       (:float 4)
       (:double 8)
       (:uint8 1)
@@ -100,6 +109,7 @@
       (:pointer (c-type-alignment :pointer))))
   (:method (type)
     (ecase type
+      (:boolean 4)
       (:float 4)
       (:double 8)
       (:uint8 1)
@@ -134,7 +144,7 @@
                  (if (and (<= d-min s-min) (>= d-max s-max)) t :warn))
                 (s-min
                  (case dest
-                   ((:float :double) t)))
+                   ((:float :double :boolean) t)))
                 (d-min
                  (case src
                    ((:float :double) :warn)))
@@ -177,16 +187,34 @@
   (multiple-value-bind (min max) (c-int-range type)
     (and min (<= min value) (<= value max))))
 
+(def (function i) array-c-type? (type)
+  (and (consp type)
+       (eq (car type) :pointer)))
+
 (def function verify-array (arr)
   (let ((arr/type (form-c-type-of arr)))
-    (unless (and (consp arr/type)
-                 (eq (car arr/type) :pointer))
+    (unless (array-c-type? arr/type)
       (error "Must be an array: ~S" (unwalk-form arr)))))
 
 (def function verify-array-var (arr)
   (unless (typep arr 'walked-lexical-variable-reference-form)
     (error "Must be a variable: ~S" (unwalk-form arr)))
   (verify-array arr))
+
+;;; Local var creation
+
+(def function make-local-var (name type-spec &key from-c-type?)
+  (multiple-value-bind (item-type dims)
+      (if from-c-type?
+          (aprog1 type-spec
+            (check-type it keyword))
+          (parse-global-type type-spec))
+    (when (and dims (not (every #'numberp dims)))
+      (error "Local arrays must have fixed dimensions: ~S" type-spec))
+    (make-instance 'gpu-local-var
+                   :name name
+                   :c-name (unique-c-name name (unique-name-tbl-of *cur-gpu-function*))
+                   :item-type item-type :dimension-mask dims)))
 
 ;;; Type propagation engine
 
@@ -225,11 +253,14 @@
 
   (:method ((form the-form) &key upper-type)
     (declare (ignore upper-type))
-    (aprog1 (parse-global-type (declared-type-of form))
-      (let ((innert (propagate-c-types (value-of form) :upper-type it)))
-        (unless (equal it innert)
-          (verify-cast innert it form :warn? nil)
-          (change-class form 'cast-form)))))
+    (let* ((cast-type (parse-local-type (declared-type-of form)))
+           (arg-type (propagate-c-types (value-of form) :upper-type cast-type)))
+      (when (null cast-type)
+        (setf cast-type arg-type))
+      (unless (equal cast-type arg-type)
+        (verify-cast arg-type cast-type form :warn? nil)
+        (change-class form 'cast-form))
+      cast-type))
 
   (:method ((form walked-lexical-variable-reference-form) &key upper-type)
     (declare (ignore upper-type))
@@ -258,6 +289,10 @@
            :double :float))
       (double-float :double)
       (keyword      :keyword)
+      (boolean
+       (cond ((and (null it) (eq upper-type :void))
+              :void)
+             (t :boolean)))
       (t (error "Cannot use constant ~S in C code." it))))
 
   (:method ((form setq-form) &key upper-type)
@@ -290,6 +325,40 @@
           (let ((rtype (propagate-c-types (car (last (body-of form)))
                                           :upper-type upper-type)))
             (if (eq upper-type :void) :void rtype)))))
+
+  (:method ((form lexical-variable-binding-form) &key upper-type)
+    (declare (ignore upper-type))
+    (let* ((pdecls (declarations-of (parent-of form)))
+           (decl-spec (find-form-by-name (name-of form) pdecls
+                                         :type 'type-declaration-form))
+           (decl-type (if decl-spec
+                          (parse-local-type (declared-type-of decl-spec))))
+           (init-form (initial-value-of form))
+           (init-type (propagate-c-types init-form :upper-type decl-type)))
+      (cond ((null decl-type)
+             (setf decl-type init-type))
+            ;; nil means no initialization
+            ((and (not (eq decl-type :boolean))
+                  (nil-constant? init-form))
+             (setf (initial-value-of form) nil
+                   init-form nil))
+            (t
+             (verify-cast init-type decl-type form
+                          :prefix "variable initialization ")))
+      (when (array-c-type? decl-type)
+        (setf (gpu-variable-of form)
+              (if init-form
+                  (ensure-gpu-var init-form)
+                  (make-local-var (name-of form) (declared-type-of decl-spec))))
+        (unless (array-var? (gpu-variable-of form))
+          (error "Must be an array variable: ~S" (unwalk-form form))))
+      decl-type))
+
+  (:method ((form lexical-variable-binder-form) &key upper-type)
+    (declare (ignore upper-type))
+    (dolist (binding (bindings-of form))
+      (propagate-c-types binding))
+    (call-next-method))
 
   ;; Delegate calls and assignments
   (:method ((form free-application-form) &key upper-type)

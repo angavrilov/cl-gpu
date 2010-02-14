@@ -46,6 +46,10 @@
    (static-asize   :documentation "Full dimension if all dims constant."))
   (:documentation "Common name of a global variable or parameter."))
 
+(def class* gpu-local-var (gpu-variable)
+  ()
+  (:documentation "A local variable in a GPU function."))
+
 (def generic array-var? (obj)
   (:method ((obj gpu-variable)) (dimension-mask-of obj)))
 
@@ -91,6 +95,8 @@
               (make-array (1- (length dimension-mask)) :initial-element nil)))
       (when static-asize
         (setf includes-locked? t)))))
+
+(defparameter *cur-gpu-function* nil)
 
 (def class* gpu-function ()
   ((name           :documentation "Lisp name of the function")
@@ -198,12 +204,14 @@
 (def function compile-gpu-module (module)
   (with-current-target
     (dolist (krnl (kernels-of module))
-      (compile-object krnl))
+      (let ((*cur-gpu-function* krnl))
+        (compile-object krnl)))
     (compile-object module))
   (aprog1 (finalize-gpu-module module)
     (with-current-target
       (dolist (krnl (kernels-of it))
-        (post-compile-object krnl))
+        (let ((*cur-gpu-function* krnl))
+          (post-compile-object krnl)))
       (post-compile-object it))))
 
 ;;; Instance management

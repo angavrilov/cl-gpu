@@ -40,6 +40,44 @@
 (def layered-function generate-invoker-form (obj)
   (:documentation "Creates a lambda form to invoke the kernel."))
 
+;;; Local variables
+
+(def layered-method generate-c-code ((var gpu-local-var))
+  (with-slots (c-name item-type dimension-mask static-asize) var
+    (cond
+      ;; Fixed-size array
+      (static-asize
+       (format nil "~A ~A[~A]"
+               (c-type-string item-type) c-name
+               static-asize))
+      ;; Dynamic array
+      (dimension-mask
+       (error "Dynamic local arrays not supported."))
+      ;; Scalar
+      (t (format nil "~A ~A" (c-type-string item-type) c-name)))))
+
+(def layered-method generate-var-ref ((obj gpu-local-var))
+  (c-name-of obj))
+
+(def layered-method generate-array-dim ((obj gpu-local-var) idx)
+  (with-slots (dimension-mask) obj
+    (aref dimension-mask idx)))
+
+(def layered-method generate-array-size ((obj gpu-local-var))
+  (with-slots (static-asize) obj
+    (assert static-asize)
+    static-asize))
+
+(def layered-method generate-array-extent ((obj gpu-local-var))
+  (with-slots (static-asize) obj
+    (assert static-asize)
+    static-asize))
+
+(def layered-method generate-array-stride ((obj gpu-local-var) idx)
+  (with-slots (c-name dimension-mask static-asize) obj
+    (assert static-asize)
+    (reduce #'* dimension-mask :start (1+ idx))))
+
 ;;; Global variables
 
 (def layered-method generate-c-code ((var gpu-global-var))
@@ -253,6 +291,8 @@
          (format stream "~Af" value))
         ((:uint32)
          (format stream "~AU" value))
+        ((:boolean)
+         (princ (if value "1" "0") stream))
         ((:int8 :uint8 :int16 :uint16)
          (format stream "((~A)~A)" (c-type-string type) value)))))
 
@@ -286,6 +326,20 @@
                (t (recurse item))))
             (t (recurse item)))))))
 
+  ;; Local variables
+  (:method ((form lexical-variable-binding-form) stream &key)
+    (let ((type (form-c-type-of form)))
+      (unless (gpu-variable-of form)
+        (setf (gpu-variable-of form)
+              (make-local-var (name-of form) type :from-c-type? t)))
+      (when (typep (gpu-variable-of form) 'gpu-local-var)
+        (emit-code-newline stream)
+        (princ (generate-c-code (gpu-variable-of form)) stream)
+        (awhen (initial-value-of form)
+          (princ " = " stream)
+          (emit-c-code it stream))
+        (princ ";" stream))))
+
   ;; Program block
   (:method ((form implicit-progn-mixin) stream &key)
     (dolist (item (body-of form))
@@ -296,6 +350,15 @@
   (:method ((form progn-form) stream &key)
     (princ "{" stream)
     (with-indented-c-code
+      (call-next-method))
+    (emit-code-newline stream)
+    (princ "}" stream))
+
+  (:method ((form lexical-variable-binder-form) stream &key)
+    (princ "{" stream)
+    (with-indented-c-code
+      (dolist (binding (bindings-of form))
+        (emit-c-code binding stream))
       (call-next-method))
     (emit-code-newline stream)
     (princ "}" stream))

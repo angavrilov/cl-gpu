@@ -58,7 +58,8 @@
                      ((subtypep type '(signed-byte 32)) 'int32)
                      ((subtypep type '(signed-byte 64)) 'int64)))
               ((subtypep type 'single-float) 'single-float)
-              ((subtypep type 'double-float) 'double-float))
+              ((subtypep type 'double-float) 'double-float)
+              ((subtypep type 'boolean) 'boolean))
         type)))
 
 (def (function e) foreign-to-lisp-type (type)
@@ -66,14 +67,16 @@
   (case (canonify-foreign-type type)
     (:int8 'int8) (:int16 'int16) (:int32 'int32) (:int64 'int64)
     (:uint8 'uint8) (:uint16 'uint16) (:uint32 'uint32) (:uint64 'uint64)
-    (:float 'single-float) (:double 'double-float) (:void nil)))
+    (:float 'single-float) (:double 'double-float) (:boolean 'boolean)
+    (:void nil)))
 
 (def (function e) lisp-to-foreign-type (type)
   "Converts a lisp type to a foreign supertype."
   (case (canonify-lisp-type type)
     (int8 :int8) (int16 :int16) (int32 :int32) (int64 :int64)
     (uint8 :uint8) (uint16 :uint16) (uint32 :uint32) (uint64 :uint64)
-    (single-float :float) (double-float :double) ((nil) :void)))
+    (single-float :float) (double-float :double) (boolean :boolean)
+    ((nil) :void)))
 
 (def (function e) foreign-to-lisp-elt-type (type)
   "Converts a foreign type to an equivalent lisp array elt type. NIL if none."
