@@ -10,20 +10,28 @@
 
 (def type-computer aref (arr &rest indexes)
   (verify-array-var arr)
+  (unless (= (length (dimension-mask-of (ensure-gpu-var arr)))
+             (length indexes))
+    (error "Incorrect array index count in ~S" (unwalk-form -form-)))
   (loop for itype in indexes/type and idx in indexes
-     do (verify-cast itype :int32 idx :prefix "aref index "))
+     do (verify-cast itype :uint32 idx :prefix "aref index "
+                     :allow '(:int32) :error-on-warn? t))
   (second arr/type))
 
 (def type-arg-walker (setf aref) (arr &rest indexes)
   (let ((arr/type (recurse arr)))
     (verify-array-var arr)
+    (unless (= (length (dimension-mask-of (ensure-gpu-var arr)))
+               (length indexes))
+      (error "Incorrect array index count in ~S" (unwalk-form -form-)))
     (dolist (idx indexes)
-      (recurse idx :upper-type :int32))
+      (recurse idx :upper-type :uint32))
     (recurse -value- :upper-type (second arr/type))))
 
 (def type-computer (setf aref) (arr &rest indexes)
   (loop for itype in indexes/type and idx in indexes
-     do (verify-cast itype :int32 idx :prefix "aref index "))
+     do (verify-cast itype :uint32 idx :prefix "aref index "
+                     :allow '(:int32) :error-on-warn? t))
   (verify-cast -value-/type (second arr/type) -form-)
   (if (eq -upper-type- :void) :void (second arr/type)))
 
@@ -52,17 +60,19 @@
 
 (def type-computer raw-aref (arr index)
   (verify-array-var arr)
-  (verify-cast index/type :int32 index :prefix "raw-aref index ")
+  (verify-cast index/type :uint32 index :prefix "raw-aref index "
+               :allow '(:int32) :error-on-warn? t)
   (second arr/type))
 
 (def type-arg-walker (setf raw-aref) (arr index)
   (let ((arr/type (recurse arr)))
     (verify-array-var arr)
-    (recurse index :upper-type :int32)
+    (recurse index :upper-type :uint32)
     (recurse -value- :upper-type (second arr/type))))
 
 (def type-computer (setf raw-aref) (arr index)
-  (verify-cast index/type :int32 index :prefix "raw-aref index ")
+  (verify-cast index/type :uint32 index :prefix "raw-aref index "
+               :allow '(:int32) :error-on-warn? t)
   (verify-cast -value-/type (second arr/type) -form-)
   (if (eq -upper-type- :void) :void (second arr/type)))
 

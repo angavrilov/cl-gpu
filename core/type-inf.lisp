@@ -162,13 +162,16 @@
              (item-type-of it))
          (form-c-type-of defn))))
 
-(def function verify-cast (src dest form &key (prefix "") (warn? t))
-  (aif (can-promote-type? src dest)
-       (when (and warn? (eq it :warn))
-         (warn "Implicit cast of ~S to ~S in ~A~S"
-               src dest prefix (unwalk-form form)))
-       (error "Cannot cast ~S to ~S in ~A~S"
-              src dest prefix (unwalk-form form))))
+(def function verify-cast (src dest form &key (prefix "") (warn? t) error-on-warn? allow)
+  (let ((status (or (member src allow)
+                    (can-promote-type? src dest))))
+    (cond ((or (null status)
+               (and (eq status :warn) error-on-warn?))
+           (error "Cannot cast ~S to ~S in ~A~S"
+                  src dest prefix (unwalk-form form)))
+          ((and warn? (eq status :warn))
+           (warn "Implicit cast of ~S to ~S in ~A~S"
+               src dest prefix (unwalk-form form))))))
 
 (def function int-value-matches-type? (type value)
   (multiple-value-bind (min max) (c-int-range type)
