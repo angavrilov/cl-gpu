@@ -377,4 +377,41 @@
          do (emit-c-code item stream))
       (emit-code-newline stream))
     (princ ")" stream))
+
+  ;; Tag body
+  (:method ((form tagbody-form) stream &key)
+    ;; Assign label identifiers
+    (dolist (item (body-of form))
+      (when (and (typep item 'go-tag-form)
+                 (null (c-name-of item)))
+        (setf (c-name-of item) (make-local-c-name (name-of item)))))
+    ;; Output C code
+    (princ "{" stream)
+    (with-indented-c-code
+      (loop for tail on (body-of form)
+         do (atypecase (car tail)
+              (go-tag-form
+               (let ((*c-code-indent* (- *c-code-indent* *c-code-indent-step*)))
+                 (emit-code-newline stream)
+                 (format stream "~A:" (c-name-of it)))
+               ;; Insert a semicolon if ends with a label
+               (unless (cdr tail)
+                 (emit-code-newline stream)
+                 (format stream "; /*end*/")))
+              (t
+               (emit-code-newline stream)
+               (emit-c-code it stream)
+               (princ ";" stream)))))
+    (emit-code-newline stream)
+    (princ "}" stream))
+
+  (:method ((form go-tag-form) stream &key)
+    (declare (ignore form stream))
+    ;; Can only be inside tagbody
+    (assert nil))
+
+  (:method ((form go-form) stream &key)
+    (unless (c-name-of (tag-of form))
+      (error "Uninitialized GO tag: ~S" (name-of form)))
+    (format stream "goto ~A" (c-name-of (tag-of form))))
   )

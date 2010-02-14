@@ -37,6 +37,8 @@
 (def form-attribute-accessor assigned-to?
   :type boolean :forms (lexical-variable-binding-form
                         function-argument-form))
+(def form-attribute-accessor c-name
+  :forms (go-tag-form block-form))
 
 ;; A wrapper for global variables
 

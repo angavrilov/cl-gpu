@@ -203,6 +203,9 @@
 
 ;;; Local var creation
 
+(def function make-local-c-name (name)
+  (unique-c-name name (unique-name-tbl-of *cur-gpu-function*)))
+
 (def function make-local-var (name type-spec &key from-c-type?)
   (multiple-value-bind (item-type dims)
       (if from-c-type?
@@ -213,7 +216,7 @@
       (error "Local arrays must have fixed dimensions: ~S" type-spec))
     (make-instance 'gpu-local-var
                    :name name
-                   :c-name (unique-c-name name (unique-name-tbl-of *cur-gpu-function*))
+                   :c-name (make-local-c-name name)
                    :item-type item-type :dimension-mask dims)))
 
 ;;; Type propagation engine
@@ -325,6 +328,22 @@
           (let ((rtype (propagate-c-types (car (last (body-of form)))
                                           :upper-type upper-type)))
             (if (eq upper-type :void) :void rtype)))))
+
+  (:method ((form tagbody-form) &key upper-type)
+    (declare (ignore upper-type))
+    (dolist (item (body-of form))
+      (propagate-c-types item :upper-type :void))
+    :void)
+
+  (:method ((form go-tag-form) &key upper-type)
+    (declare (ignore form upper-type))
+    :void)
+
+  (:method ((form go-form) &key upper-type)
+    (declare (ignore upper-type))
+    (unless (tag-of form)
+      (error "Unknown GO tag: ~S" (name-of form)))
+    :void)
 
   (:method ((form lexical-variable-binding-form) &key upper-type)
     (declare (ignore upper-type))
