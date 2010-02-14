@@ -22,6 +22,9 @@
               (list :in it))
             (getf options :mode))))
 
+(def function make-type-arg (sym)
+  (format-symbol (symbol-package sym) "~A/TYPE" sym))
+
 (def macro make-builtin-handler-method (builtin-name
                                         builtin-args
                                         method-name-selector

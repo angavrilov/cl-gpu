@@ -86,7 +86,7 @@
              (dolist (arg (arguments-of target))
                (setf (parent-of arg) setf)))
             (t
-             (error "Not an lvalue form: ~S" (second -form-)))))
+             (error "Not an lvalue form: ~S" (unwalk-form target)))))
         (setf (value-of setf) (recurse (third -form-) setf)))))
 
 (def unwalker setf-application-form (value)

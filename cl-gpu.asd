@@ -28,6 +28,7 @@
                              (:file "forms" :depends-on ("gpu-module"))
                              (:file "type-inf" :depends-on ("gpu-module" "forms"))
                              (:file "codegen" :depends-on ("type-inf"))
+                             (:file "builtins" :depends-on ("type-inf" "codegen"))
                              (:file "syntax" :depends-on ("type-inf"))))
                (:module "cuda"
                 :depends-on ("core")

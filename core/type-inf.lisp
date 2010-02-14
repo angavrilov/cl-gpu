@@ -310,20 +310,16 @@
    :prefix `(macrolet ((recurse (form &key upper-type)
                          `(propagate-c-types ,form :upper-type ,upper-type))))))
 
-(def function make-type-arg (sym)
-  (format-symbol (symbol-package sym) "~A/TYPE" sym))
-
 (def definer type-computer (name args &body code)
   (make-builtin-handler-method
    ;; Builtin prototype + method name
    name args (if assn? 'compute-assn-type 'compute-call-type)
    ;; Body
    (let* ((rq-targs (mapcar #'make-type-arg rq-args))
-          (opt-targs (mapcar (lambda (x) (list* (make-type-arg (first x)) (rest x)))
-                             opt-args))
+          (opt-targs (mapcar (lambda (x) (make-type-arg (first x))) opt-args))
           (rest-targ (if rest-arg (make-type-arg rest-arg)))
           (all-args (flatten (list rq-args (mapcar #'first opt-args) rest-arg)))
-          (all-targs (flatten (list rq-targs (mapcar #'first opt-targs) rest-targ))))
+          (all-targs (flatten (list rq-targs opt-targs rest-targ))))
      `((declare (ignorable ,@all-args))
        (let* ((-arguments-/type (mapcar #'form-c-type-of -arguments-))
               ,@(if assn?
@@ -336,66 +332,4 @@
    :method-args `(&key ((:upper-type -upper-type-)))
    :top-decls `((ignorable -upper-type-))))
 
-;;; Builtin definitions
-
-(def type-computer aref (arr &rest indexes)
-  (verify-array-var arr)
-  (loop for itype in indexes/type and idx in indexes
-     do (verify-cast itype :int32 idx :prefix "aref index "))
-  (second arr/type))
-
-(def type-arg-walker (setf aref) (arr &rest indexes)
-  (let ((arr/type (recurse arr)))
-    (verify-array-var arr)
-    (dolist (idx indexes)
-      (recurse idx :upper-type :int32))
-    (recurse -value- :upper-type (second arr/type))))
-
-(def type-computer (setf aref) (arr &rest indexes)
-  (loop for itype in indexes/type and idx in indexes
-     do (verify-cast itype :int32 idx :prefix "aref index "))
-  (verify-cast -value-/type (second arr/type) -form-)
-  (if (eq -upper-type- :void) :void (second arr/type)))
-
-(def type-computer raw-aref (arr index)
-  (verify-array-var arr)
-  (verify-cast index/type :int32 index :prefix "raw-aref index ")
-  (second arr/type))
-
-(def type-arg-walker (setf raw-aref) (arr index)
-  (let ((arr/type (recurse arr)))
-    (verify-array-var arr)
-    (recurse index :upper-type :int32)
-    (recurse -value- :upper-type (second arr/type))))
-
-(def type-computer (setf raw-aref) (arr index)
-  (verify-cast index/type :int32 index :prefix "raw-aref index ")
-  (verify-cast -value-/type (second arr/type) -form-)
-  (if (eq -upper-type- :void) :void (second arr/type)))
-
-(def type-computer array-total-size (arr)
-  (verify-array-var arr)
-  :uint32)
-
-(def type-computer array-raw-extent (arr)
-  (verify-array-var arr)
-  :uint32)
-
-(def type-computer array-dimension (var dimidx)
-  (verify-array-var var)
-  (let ((cval (ensure-int-constant dimidx))
-        (gvar (ensure-gpu-var var)))
-    (unless (and (>= cval 0)
-                 (< cval (length (dimension-mask-of gvar))))
-      (error "Dimension index out of bounds: ~S" (unwalk-form -form-))))
-  :uint32)
-
-(def type-computer array-raw-stride (var dimidx)
-  (verify-array-var var)
-  (let ((cval (ensure-int-constant dimidx))
-        (gvar (ensure-gpu-var var)))
-    (unless (and (>= cval 0)
-                 (< cval (1- (length (dimension-mask-of gvar)))))
-      (error "Stride index out of bounds: ~S" (unwalk-form -form-))))
-  :uint32)
 
