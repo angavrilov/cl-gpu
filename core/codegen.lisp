@@ -269,7 +269,13 @@
    :prefix `(macrolet ((emit (format &rest args)
                          `(format -stream- ,format ,@args))
                        (recurse (form &rest args)
-                         `(emit-c-code ,form -stream- ,@args))))))
+                         `(emit-c-code ,form -stream- ,@args))
+                       (code (&rest args)
+                         `(progn ,@(mapcar (lambda (arg)
+                                             (typecase arg
+                                               (string `(princ ,arg -stream-))
+                                               (t `(recurse ,arg))))
+                                           args)))))))
 
 (def layered-methods emit-c-code
   ;; Delegate function calls

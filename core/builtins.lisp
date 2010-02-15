@@ -53,8 +53,7 @@
 
 (def c-code-emitter (setf aref) (var &rest indexes)
   (emit-aref-core var indexes -stream-)
-  (emit " = ")
-  (recurse -value-))
+  (code " = " -value-))
 
 ;;; RAW-AREF
 
@@ -79,15 +78,12 @@
 (def c-code-emitter raw-aref (var index)
   (let ((gpu-var (ensure-gpu-var var)))
     (emit "~A[" (generate-var-ref gpu-var))
-    (recurse index)
-    (emit "]")))
+    (code index "]")))
 
 (def c-code-emitter (setf raw-aref) (var index)
   (let ((gpu-var (ensure-gpu-var var)))
     (emit "~A[" (generate-var-ref gpu-var))
-    (recurse index)
-    (emit "] = ")
-    (recurse -value-)))
+    (code index "] = " -value-)))
 
 ;;; Misc array properties
 
@@ -195,11 +191,7 @@
                       "1.0/" "1.0f/")))
 
 (def c-code-emitter 1+ (arg)
-  (emit "(")
-  (recurse arg)
-  (emit "+1)"))
+  (code "(" arg "+1)"))
 
 (def c-code-emitter 1- (arg)
-  (emit "(")
-  (recurse arg)
-  (emit "-1)"))
+  (code "(" arg "-1)"))
