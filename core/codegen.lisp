@@ -247,7 +247,7 @@
   `(let ((*c-code-indent* (+ *c-code-indent* *c-code-indent-step*)))
      ,@code))
 
-(def layered-function emit-c-code (form stream &key))
+(def layered-function emit-c-code (form stream &key &allow-other-keys))
 
 (def layered-function emit-call-c-code (name form stream &key)
   (:method (name form stream &key)
@@ -339,38 +339,47 @@
       (unless (gpu-variable-of form)
         (setf (gpu-variable-of form)
               (make-local-var (name-of form) type :from-c-type? t)))
-      (when (typep (gpu-variable-of form) 'gpu-local-var)
-        (emit-code-newline stream)
-        (princ (generate-c-code (gpu-variable-of form)) stream)
-        (awhen (initial-value-of form)
-          (princ " = " stream)
-          (emit-c-code it stream))
-        (princ ";" stream))))
+      (cond ((typep (gpu-variable-of form) 'gpu-local-var)
+             (princ (generate-c-code (gpu-variable-of form)) stream)
+              (awhen (initial-value-of form)
+                (princ " = " stream)
+                (emit-c-code it stream))
+             (princ ";" stream))
+            (t (format stream "/* skip: ~A */" (name-of form))))))
 
   ;; Program block
-  (:method ((form implicit-progn-mixin) stream &key)
-    (dolist (item (body-of form))
-      (emit-code-newline stream)
-      (emit-c-code item stream)
-      (princ ";" stream)))
+  (:method :around ((form implicit-progn-mixin) stream &key inside-block?)
+    (if inside-block?
+        (call-next-method)
+        (progn
+          (princ "{" stream)
+          (with-indented-c-code
+            (emit-code-newline stream)
+            (call-next-method))
+          (emit-code-newline stream)
+          (princ "}" stream))))
 
-  (:method ((form progn-form) stream &key)
-    (princ "{" stream)
-    (with-indented-c-code
-      (call-next-method))
-    (emit-code-newline stream)
-    (princ "}" stream))
+  (:method ((form implicit-progn-mixin) stream &key)
+    (loop
+       for item in (body-of form)
+       for first = t then nil
+       do
+         (when (or first (not (nop-form? item)))
+           (unless first
+             (emit-code-newline stream))
+           (emit-c-code item stream :inside-block? t)
+           (princ ";" stream))))
+
+  (:method :around ((form lexical-variable-binder-form) stream &key)
+    (call-next-layered-method form stream :inside-block? nil))
 
   (:method ((form lexical-variable-binder-form) stream &key)
-    (princ "{" stream)
-    (with-indented-c-code
-      (dolist (binding (bindings-of form))
-        (emit-c-code binding stream))
-      (call-next-method))
-    (emit-code-newline stream)
-    (princ "}" stream))
+    (dolist (binding (bindings-of form))
+      (emit-c-code binding stream)
+      (emit-code-newline stream))
+    (call-next-method))
 
-  (:method ((form expr-progn-form) stream &key)
+  (:method :around ((form expr-progn-form) stream &key)
     (princ "(" stream)
     (with-indented-c-code
       (emit-code-newline stream)
@@ -393,24 +402,24 @@
                  (null (c-name-of item)))
         (setf (c-name-of item) (make-local-c-name (name-of item)))))
     ;; Output C code
-    (princ "{" stream)
-    (with-indented-c-code
-      (loop for tail on (body-of form)
-         do (atypecase (car tail)
-              (go-tag-form
-               (let ((*c-code-indent* (- *c-code-indent* *c-code-indent-step*)))
-                 (emit-code-newline stream)
-                 (format stream "~A:" (c-name-of it)))
-               ;; Insert a semicolon if ends with a label
-               (unless (cdr tail)
-                 (emit-code-newline stream)
-                 (format stream "; /*end*/")))
-              (t
+    (loop
+       for tail on (body-of form)
+       for first = t then nil
+       do (atypecase (car tail)
+            (go-tag-form
+             (let ((*c-code-indent* (- *c-code-indent* *c-code-indent-step*)))
+               (unless first
+                 (emit-code-newline stream))
+               (format stream "~A:" (c-name-of it)))
+             ;; Insert a semicolon if ends with a label
+             (unless (cdr tail)
                (emit-code-newline stream)
-               (emit-c-code it stream)
-               (princ ";" stream)))))
-    (emit-code-newline stream)
-    (princ "}" stream))
+               (format stream "; /*end*/")))
+            (t
+             (unless first
+               (emit-code-newline stream))
+             (emit-c-code it stream :inside-block? t)
+             (princ ";" stream)))))
 
   (:method ((form go-tag-form) stream &key)
     (declare (ignore form stream))
@@ -428,13 +437,9 @@
     (when (null (c-name-of form))
       (setf (c-name-of form) (make-local-c-name (name-of form))))
     ;; Output C code
-    (princ "{" stream)
-    (with-indented-c-code
-      (call-next-method))
+    (call-next-method)
     (emit-code-newline stream)
-    (format stream "~A: ; /*end block*/" (c-name-of form))
-    (emit-code-newline stream)
-    (princ "}" stream))
+    (format stream "~A: ; /*end block*/" (c-name-of form)))
 
   (:method ((form return-from-form) stream &key)
     (unless (c-name-of (target-block-of form))
@@ -449,14 +454,14 @@
     (princ ") {" stream)
     (with-indented-c-code
       (emit-code-newline stream)
-      (emit-c-code (then-of form) stream))
+      (emit-c-code (then-of form) stream :inside-block? t))
     (emit-code-newline stream)
     (princ "}" stream)
     (unless (nop-form? (else-of form))
       (princ " else {" stream)
       (with-indented-c-code
         (emit-code-newline stream)
-        (emit-c-code (else-of form) stream))
+        (emit-c-code (else-of form) stream :inside-block? t))
       (emit-code-newline stream)
       (princ "}" stream)))
 

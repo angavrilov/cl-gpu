@@ -349,7 +349,8 @@
     (propagate-c-types (form-of function) :upper-type :void)
     (setf (body-of function)
           (with-output-to-string (stream)
-            (emit-c-code (form-of function) stream)))
+            (emit-code-newline stream)
+            (emit-c-code (form-of function) stream :inside-block? t)))
     (dolist (arg (arguments-of function))
       (setf (includes-locked? arg) t))))
 
