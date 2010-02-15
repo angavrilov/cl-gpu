@@ -181,7 +181,8 @@
                   src dest prefix (unwalk-form form)))
           ((and warn? (eq status :warn))
            (warn "Implicit cast of ~S to ~S in ~A~S"
-               src dest prefix (unwalk-form form))))))
+                 src dest prefix (unwalk-form form))))
+    dest))
 
 (def function int-value-matches-type? (type value)
   (multiple-value-bind (min max) (c-int-range type)
@@ -344,6 +345,38 @@
     (unless (tag-of form)
       (error "Unknown GO tag: ~S" (name-of form)))
     :void)
+
+  (:method ((form block-form) &key upper-type)
+    (setf (form-c-type-of form) upper-type)
+    (let ((inner-t (call-next-method))
+          (outer-t (form-c-type-of form)))
+      (if (null outer-t)
+          (setf outer-t inner-t)
+          (unless (eq outer-t :void)
+            (verify-cast inner-t outer-t form :allow '(:void))))
+      outer-t))
+
+  (:method ((form return-from-form) &key upper-type)
+    (declare (ignore upper-type))
+    (let ((blk (target-block-of form)))
+      (unless blk
+        (error "Unknown return tag: ~S" (name-of form)))
+      (let ((vtype (propagate-c-types (result-of form)
+                                      :upper-type (form-c-type-of blk)))
+            (btype (form-c-type-of blk)))
+        (if (null btype)
+            (setf (form-c-type-of blk) vtype)
+            (unless (eq btype :void)
+              (verify-cast vtype btype form)))
+        :void)))
+
+  (:method ((form if-form) &key upper-type)
+    (verify-cast (propagate-c-types (condition-of form) :upper-type :boolean)
+                 :boolean form :prefix "condition of ")
+    (let ((rt-t (propagate-c-types (then-of form) :upper-type upper-type))
+          (rt-e (propagate-c-types (else-of form) :upper-type upper-type)))
+      (verify-cast rt-e rt-t form :prefix "else branch of")
+      rt-t))
 
   (:method ((form lexical-variable-binding-form) &key upper-type)
     (declare (ignore upper-type))

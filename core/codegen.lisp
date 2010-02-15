@@ -291,6 +291,7 @@
     (let ((value (value-of form))
           (type (form-c-type-of form)))
       (ecase type
+        ((:void))
         ((:int32 :double)
          (format stream "~A" value))
         ((:float)
@@ -420,4 +421,44 @@
     (unless (c-name-of (tag-of form))
       (error "Uninitialized GO tag: ~S" (name-of form)))
     (format stream "goto ~A" (c-name-of (tag-of form))))
+
+  ;; Block & return
+  (:method ((form block-form) stream &key)
+    ;; Assign the label
+    (when (null (c-name-of form))
+      (setf (c-name-of form) (make-local-c-name (name-of form))))
+    ;; Output C code
+    (princ "{" stream)
+    (with-indented-c-code
+      (call-next-method))
+    (emit-code-newline stream)
+    (format stream "~A: ; /*end block*/" (c-name-of form))
+    (emit-code-newline stream)
+    (princ "}" stream))
+
+  (:method ((form return-from-form) stream &key)
+    (unless (c-name-of (target-block-of form))
+      (error "Uninitialized RETURN-FROM tag: ~S" (name-of form)))
+    (assert (nop-form? (result-of form)))
+    (format stream "goto ~A" (c-name-of (target-block-of form))))
+
+  ;; If
+  (:method ((form if-form) stream &key)
+    (princ "if (" stream)
+    (emit-c-code (condition-of form) stream)
+    (princ ") {" stream)
+    (with-indented-c-code
+      (emit-code-newline stream)
+      (emit-c-code (then-of form) stream))
+    (emit-code-newline stream)
+    (princ "}" stream)
+    (unless (nop-form? (else-of form))
+      (princ " else {" stream)
+      (with-indented-c-code
+        (emit-code-newline stream)
+        (emit-c-code (else-of form) stream))
+      (emit-code-newline stream)
+      (princ "}" stream)))
+
+  
   )

@@ -170,6 +170,13 @@
   (and (typep obj 'constant-form)
        (eq (value-of obj) nil)))
 
+(def function nop-form? (obj)
+  (or (null obj)
+      (nil-constant? obj)
+      (and (typep obj 'free-application-form)
+           (eq (operator-of obj) 'values)
+           (null (arguments-of obj)))))
+
 (def function unknown-type? (type)
   (case type
     ((nil t number real) t)))
