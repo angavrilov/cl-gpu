@@ -116,6 +116,35 @@
   `(inline-verbatim (,form-c-type)
      ,@(recurse-on-body (body-of -form-))))
 
+;;; Macros
+
+(def generic expand-gpu-macro (name form env)
+  (:method (name form env)
+    (declare (ignore name env))
+    form))
+
+(def layered-method hu.dwim.walker::walker-macroexpand-1 :in gpu-target ((form cons) &optional env)
+  (let ((rvalue (expand-gpu-macro (first form) form env)))
+    (if (eq rvalue form)
+        (call-next-method)
+        (values rvalue t))))
+
+(def (definer e) gpu-macro (name args &body code)
+  "Like compiler-macro, but for GPU code."
+  (with-unique-names (whole env vname)
+    (when (eq (first args) '&whole)
+      (setf whole (second args)
+            args (cddr args)))
+    (awhen (position '&environment args)
+      (setf env (nth (1+ it) args)
+            args (append (subseq args 0 it)
+                         (subseq args (+ it 2)))))
+    `(defmethod expand-gpu-macro ((,vname (eql ',name)) ,whole ,env)
+       (declare (ignore ,vname)
+                (ignorable ,env))
+       (destructuring-bind ,args (cdr ,whole)
+         ,@code))))
+
 ;;;
 
 (def function ensure-gpu-var (ref)
