@@ -102,8 +102,9 @@
   (declare (ignore ret-type code))
   (error "This form cannot be used in ordinary lisp code: ~S" full))
 
-(def (form-class :export nil) verbatim-code-form (implicit-progn-mixin)
-  ((form-c-type)))
+(def (form-class :export nil) verbatim-code-form ()
+  ((body)
+   (form-c-type)))
 
 (def (walker-method :in gpu-target) inline-verbatim
   (destructuring-bind ((ret-type) &rest code) (rest -form-)
@@ -112,9 +113,9 @@
       (setf (body-of vcode)
             (mapcar (lambda (form) (recurse form vcode)) code)))))
 
-(def unwalker verbatim-code-form (form-c-type)
+(def unwalker verbatim-code-form (body form-c-type)
   `(inline-verbatim (,form-c-type)
-     ,@(recurse-on-body (body-of -form-))))
+     ,@(recurse-on-body body)))
 
 ;;; Macros
 
