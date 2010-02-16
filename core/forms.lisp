@@ -193,13 +193,6 @@
                           ;; Add a new aux argument
                           (let ((name (name-of form))
                                 (type (or (declared-type-of form) t)))
-                            ;; Use type declarations from top level
-                            (awhen (find-form-by-name name top-decls
-                                                      :type 'type-declaration-form)
-                              (unless (subtypep (declared-type-of it) type)
-                                (error "Bad type specialization of ~S: ~S is not subtype of ~S"
-                                       name (declared-type-of it) type))
-                              (setf type (declared-type-of it)))
                             ;; Use type declarations via (the ... *foo*)
                             (when (and (unknown-type? type)
                                        (typep (parent-of form) 'the-form))
