@@ -58,7 +58,7 @@
 (def (form-class :export nil) cast-form (the-form)
   ())
 
-(def (walker-method :in gpu-target) cast
+(def (walker :in gpu-target) cast
   (with-form-object (cast 'cast-form -parent- :declared-type (second -form-))
     (setf (value-of cast) (recurse (third -form-) cast))))
 
@@ -70,7 +70,7 @@
 (def (form-class :export nil) setf-application-form (application-form)
   ((value :ast-link t)))
 
-(def (walker-method :in gpu-target) setf
+(def (walker :in gpu-target) setf
   (if (> (length -form-) 3)
       (recurse `(progn
                   ,@(loop
@@ -106,7 +106,7 @@
   ((body)
    (form-c-type)))
 
-(def (walker-method :in gpu-target) inline-verbatim
+(def (walker :in gpu-target) inline-verbatim
   (destructuring-bind ((ret-type) &rest code) (rest -form-)
     (with-form-object (vcode 'verbatim-code-form -parent-
                              :form-c-type ret-type)
