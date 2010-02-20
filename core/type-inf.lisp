@@ -309,6 +309,25 @@
                    :prefix "assignment to ")
       (if (eq upper-type :void) :void target-type)))
 
+  (:method ((form values-form) &key upper-type)
+    (let ((args (values-of form)))
+      (cond ((and (consp upper-type)
+                  (eq (first upper-type) :values))
+             (unless (= (length args) (length (rest upper-type)))
+               (error "Expecting ~A values, found ~A: ~S"
+                      (length (rest upper-type))
+                      (length args) (unwalk-form form)))
+             (loop for arg in args and type in (rest upper-type)
+                do (propagate-c-types arg :upper-type type)))
+            (args
+             (propagate-c-types (first args) :upper-type upper-type)
+             (dolist (arg (rest args))
+               (propagate-c-types arg :upper-type :void))))
+      (if (or (null args)
+              (eq upper-type :void))
+          :void
+          (list* :values (mapcar #'form-c-type-of args)))))
+
   (:method ((form verbatim-code-form) &key upper-type)
     (declare (ignore upper-type))
     (dolist (item (body-of form))

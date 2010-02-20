@@ -65,6 +65,34 @@
 (def unwalker cast-form (value)
   `(cast ,(declared-type-of -form-) ,(recurse value)))
 
+;; Values
+
+(def (form-class :export nil) values-form ()
+  ((values :ast-link t)))
+
+(def (walker :in gpu-target) values
+  (with-form-object (values 'values-form -parent-)
+    (setf (values-of values)
+          (mapcar (lambda (x) (recurse x values)) (rest -form-)))))
+
+(def unwalker values-form (values)
+  `(values ,@(recurse-on-body values)))
+
+;; Multiple value setq
+
+(def (form-class :export nil) multiple-value-setq-form ()
+  ((variables :ast-link t)
+   (value :ast-link t)))
+
+(def (walker :in gpu-target) multiple-value-setq
+  (with-form-object (setq 'multiple-value-setq-form -parent-)
+    (setf (variables-of setq)
+          (mapcar (lambda (x) (recurse x setq)) (second -form-)))
+    (setf (value-of setq) (recurse (third -form-) setq))))
+
+(def unwalker multiple-value-setq-form (variables value)
+  `(multiple-value-setq ,(recurse-on-body variables) ,(recurse value)))
+
 ;; A SETF form.
 
 (def (form-class :export nil) setf-application-form (application-form)
@@ -81,6 +109,11 @@
           (typecase target
             (variable-reference-form
              (setf (variable-of setf) target))
+            (values-form
+             (change-class setf 'multiple-value-setq-form
+                           :variables (values-of target))
+             (dolist (arg (values-of target))
+               (setf (parent-of arg) setf)))
             ((or free-application-form lexical-application-form)
              (change-class setf 'setf-application-form
                            :operator (operator-of target)
@@ -174,9 +207,8 @@
 (def function nop-form? (obj)
   (or (null obj)
       (nil-constant? obj)
-      (and (typep obj 'free-application-form)
-           (eq (operator-of obj) 'values)
-           (null (arguments-of obj)))))
+      (and (typep obj 'values-form)
+           (null (values-of obj)))))
 
 (def function unknown-type? (type)
   (case type

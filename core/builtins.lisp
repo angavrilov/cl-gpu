@@ -6,28 +6,6 @@
 
 (in-package :cl-gpu)
 
-;;; VALUES
-
-(def type-arg-walker values (&rest args)
-  (cond ((and (consp -upper-type-)
-              (eq (first -upper-type-) :values))
-         (unless (= (length args) (length (rest -upper-type-)))
-           (error "Expecting ~A values, found ~A: ~S"
-                  (length (rest -upper-type-))
-                  (length args) (unwalk-form -form-)))
-         (loop for arg in args and type in (rest -upper-type-)
-            do (recurse arg :upper-type type)))
-        (args
-         (recurse (first args) :upper-type -upper-type-)
-         (dolist (arg (rest args))
-           (recurse arg :upper-type :void)))))
-
-(def type-computer values (&rest args)
-  (if (or (null args)
-          (eq -upper-type- :void))
-      :void
-      (list* :values args/type)))
-
 ;;; AREF
 
 (def type-computer aref (arr &rest indexes)
