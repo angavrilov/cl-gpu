@@ -347,6 +347,7 @@
   (unless (and (slot-boundp function 'body)
                (body-of function))
     (propagate-c-types (form-of function) :upper-type :void)
+    (flatten-statements (form-of function))
     (setf (body-of function)
           (with-output-to-string (stream)
             (emit-code-newline stream)

@@ -68,7 +68,7 @@
 
 (def function parse-gpu-module-spec (spec &key name environment)
   (with-active-layers (gpu-target)
-    (let ((id-table (make-hash-table :test #'equal))
+    (let ((id-table (make-c-name-table))
           (var-list nil)
           (kernel-list nil)
           (base-env (make-walk-environment environment)))

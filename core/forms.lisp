@@ -39,16 +39,15 @@
                         function-argument-form))
 (def form-attribute-accessor c-name
   :forms (go-tag-form block-form))
+(def form-attribute-accessor is-expression?
+  :forms (implicit-progn-mixin if-form))
+(def form-attribute-accessor is-merged-assignment?
+  :forms setq-form)
 
 ;; A wrapper for global variables
 
 (def (form-class :export nil) global-var-binding-form (name-definition-form)
   ((gpu-variable :type (or gpu-variable null))))
-
-;; An expression progn form (C comma operator)
-
-(def (form-class :export nil) expr-progn-form (progn-form)
-  ())
 
 ;; Forced cast
 
@@ -82,7 +81,8 @@
 
 (def (form-class :export nil) multiple-value-setq-form ()
   ((variables :ast-link t)
-   (value :ast-link t)))
+   (value :ast-link t)
+   (is-merged-assignment? nil)))
 
 (def (walker :in gpu-target) multiple-value-setq
   (with-form-object (setq 'multiple-value-setq-form -parent-)
@@ -112,14 +112,12 @@
             (values-form
              (change-class setf 'multiple-value-setq-form
                            :variables (values-of target))
-             (dolist (arg (values-of target))
-               (setf (parent-of arg) setf)))
+             (adjust-parents (variables-of setf)))
             ((or free-application-form lexical-application-form)
              (change-class setf 'setf-application-form
                            :operator (operator-of target)
                            :arguments (arguments-of target))
-             (dolist (arg (arguments-of target))
-               (setf (parent-of arg) setf)))
+             (adjust-parents (arguments-of setf)))
             (t
              (error "Not an lvalue form: ~S" (unwalk-form target)))))
         (setf (value-of setf) (recurse (third -form-) setf)))))
@@ -137,17 +135,20 @@
 
 (def (form-class :export nil) verbatim-code-form ()
   ((body)
-   (form-c-type)))
+   (form-c-type)
+   (is-expression?)))
 
 (def (walker :in gpu-target) inline-verbatim
-  (destructuring-bind ((ret-type) &rest code) (rest -form-)
+  (destructuring-bind ((ret-type &key (expression? t)) &rest code)
+      (rest -form-)
     (with-form-object (vcode 'verbatim-code-form -parent-
-                             :form-c-type ret-type)
+                             :form-c-type ret-type
+                             :is-expression? expression?)
       (setf (body-of vcode)
             (mapcar (lambda (form) (recurse form vcode)) code)))))
 
-(def unwalker verbatim-code-form (body form-c-type)
-  `(inline-verbatim (,form-c-type)
+(def unwalker verbatim-code-form (body form-c-type is-expression?)
+  `(inline-verbatim (,form-c-type :expression? ,is-expression?)
      ,@(recurse-on-body body)))
 
 ;;; Macros
@@ -203,6 +204,13 @@
 (def function nil-constant? (obj)
   (and (typep obj 'constant-form)
        (eq (value-of obj) nil)))
+
+(def function make-lexical-var (definition parent)
+  (with-form-object (var `walked-lexical-variable-reference-form parent
+                         :name (name-of definition)
+                         :definition definition)
+    (setf (form-c-type-of var)
+          (form-c-type-of definition))))
 
 (def function nop-form? (obj)
   (or (null obj)

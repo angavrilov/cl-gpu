@@ -55,6 +55,15 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
                   -arguments-
                 ,@,body-forms)))))))
 
+(def function adjust-parents-to (form parent)
+  (if (listp form)
+      (dolist (item form)
+        (adjust-parents-to item parent))
+      (setf (parent-of form) parent)))
+
+(def macro adjust-parents ((accessor form))
+  `(adjust-parents-to (,accessor ,form) ,form))
+
 ;;; Temporary files
 
 (def function open-temp-file (base-name &key
@@ -349,7 +358,8 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
     "explicit" "export" "false" "friend" "mutable" "namespace"
     "new" "operator" "private" "protected" "public" "reinterpret_cast"
     "static_cast" "template" "this" "throw" "true" "try" "typeid"
-    "typename" "using" "virtual" "wchar_t" "typeof")
+    "typename" "using" "virtual" "wchar_t" "typeof"
+    "nil" "t")
 
 (def function make-c-name-table ()
   (copy-hash-table *unique-id-template* :test #'equal))

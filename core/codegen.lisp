@@ -349,26 +349,43 @@
 
   ;; Program block
   (:method :around ((form implicit-progn-mixin) stream &key inside-block?)
-    (if inside-block?
-        (call-next-method)
-        (progn
-          (princ "{" stream)
-          (with-indented-c-code
-            (emit-code-newline stream)
-            (call-next-method))
-          (emit-code-newline stream)
-          (princ "}" stream))))
+    (cond ((is-expression? form)
+           (princ "(" stream)
+           (with-indented-c-code
+             (emit-code-newline stream)
+             (call-next-method)
+             (emit-code-newline stream))
+           (princ ")" stream))
+          (inside-block?
+           (call-next-method))
+          (t
+           (progn
+             (princ "{" stream)
+             (with-indented-c-code
+               (emit-code-newline stream)
+               (call-next-method))
+             (emit-code-newline stream)
+             (princ "}" stream)))))
 
   (:method ((form implicit-progn-mixin) stream &key)
-    (loop
-       for item in (body-of form)
-       for first = t then nil
-       do
-         (when (or first (not (nop-form? item)))
-           (unless first
-             (emit-code-newline stream))
-           (emit-c-code item stream :inside-block? t)
-           (princ ";" stream))))
+    (if (is-expression? form)
+        (loop
+           for item in (body-of form)
+           for first = t then nil
+           :unless first :do
+             (progn
+               (princ "," stream)
+               (emit-code-newline stream))
+           :do (emit-c-code item stream))
+        (loop
+           for item in (body-of form)
+           for first = t then nil
+           do
+           (when (or first (not (nop-form? item)))
+             (unless first
+               (emit-code-newline stream))
+             (emit-c-code item stream :inside-block? t)
+             (princ ";" stream)))))
 
   (:method :around ((form lexical-variable-binder-form) stream &key)
     (call-next-layered-method form stream :inside-block? nil))
@@ -378,21 +395,6 @@
       (emit-c-code binding stream)
       (emit-code-newline stream))
     (call-next-method))
-
-  (:method :around ((form expr-progn-form) stream &key)
-    (princ "(" stream)
-    (with-indented-c-code
-      (emit-code-newline stream)
-      (loop
-         for i from 0
-         for item in (body-of form)
-         when (> i 0)
-         do (progn
-              (princ "," stream)
-              (emit-code-newline stream))
-         do (emit-c-code item stream))
-      (emit-code-newline stream))
-    (princ ")" stream))
 
   ;; Tag body
   (:method ((form tagbody-form) stream &key)
@@ -449,21 +451,30 @@
 
   ;; If
   (:method ((form if-form) stream &key)
-    (princ "if (" stream)
-    (emit-c-code (condition-of form) stream)
-    (princ ") {" stream)
-    (with-indented-c-code
-      (emit-code-newline stream)
-      (emit-c-code (then-of form) stream :inside-block? t))
-    (emit-code-newline stream)
-    (princ "}" stream)
-    (unless (nop-form? (else-of form))
-      (princ " else {" stream)
-      (with-indented-c-code
-        (emit-code-newline stream)
-        (emit-c-code (else-of form) stream :inside-block? t))
-      (emit-code-newline stream)
-      (princ "}" stream)))
+    (cond ((is-expression? form)
+           (princ "(" stream)
+           (emit-c-code (condition-of form) stream)
+           (princ "?" stream)
+           (emit-c-code (then-of form) stream)
+           (princ ":" stream)
+           (emit-c-code (else-of form) stream)
+           (princ ")" stream))
+          (t
+           (princ "if (" stream)
+           (emit-c-code (condition-of form) stream)
+           (princ ") {" stream)
+           (with-indented-c-code
+             (emit-code-newline stream)
+             (emit-c-code (then-of form) stream :inside-block? t))
+           (emit-code-newline stream)
+           (princ "}" stream)
+           (unless (nop-form? (else-of form))
+             (princ " else {" stream)
+             (with-indented-c-code
+               (emit-code-newline stream)
+               (emit-c-code (else-of form) stream :inside-block? t))
+             (emit-code-newline stream)
+             (princ "}" stream)))))
 
   
   )
