@@ -38,6 +38,7 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
        (setf assn? t ,builtin-name (second ,builtin-name)))
      (multiple-value-bind (rq-args opt-args rest-arg kwd other aux-args)
          (parse-ordinary-lambda-list ,builtin-args)
+       (declare (ignorable rq-args opt-args rest-arg aux-args))
        (when (or kwd other)
          (error "Keyword matching not supported"))
        `(def layered-method ,,method-name-selector
@@ -48,10 +49,7 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
                  ,@(if assn?
                        `((-value- (value-of -form-)))))
             (,@,(or prefix ''(progn))
-              (destructuring-bind (,@rq-args
-                                   ,@(if opt-args `(&optional ,@opt-args))
-                                   ,@(if rest-arg `(&rest ,rest-arg))
-                                   ,@(if aux-args `(&aux ,@aux-args)))
+              (destructuring-bind ,,builtin-args
                   -arguments-
                 ,@,body-forms)))))))
 

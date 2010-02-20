@@ -23,7 +23,9 @@
    ;; Builtin prototype + method name
    name args (if assn? 'is-statement-assn? 'is-statement-call?)
    ;; Body
-   code))
+   (let ((all-args (flatten (list rq-args (mapcar #'first opt-args) rest-arg))))
+     `((declare (ignorable ,@all-args))
+       ,@code))))
 
 (def layered-function is-statement? (form)
   (:method ((form application-form))

@@ -29,7 +29,7 @@
                              (:file "type-inf" :depends-on ("gpu-module" "forms"))
                              (:file "codegen" :depends-on ("type-inf"))
                              (:file "unnest" :depends-on ("type-inf"))
-                             (:file "builtins" :depends-on ("type-inf" "codegen"))
+                             (:file "builtins" :depends-on ("type-inf" "codegen" "unnest"))
                              (:file "syntax" :depends-on ("type-inf"))))
                (:module "cuda"
                 :depends-on ("core")

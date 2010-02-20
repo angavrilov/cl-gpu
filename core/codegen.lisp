@@ -277,6 +277,14 @@
                                                (t `(recurse ,arg))))
                                            args)))))))
 
+(def function emit-assignment-code (stream variable target)
+  (let ((gpu-var (ensure-gpu-var variable)))
+    (princ (generate-var-ref gpu-var) stream))
+  (princ " = " stream)
+  (if (stringp target)
+      (princ target stream)
+      (emit-c-code target stream)))
+
 (def layered-methods emit-c-code
   ;; Delegate function calls
   (:method ((form free-application-form) stream &key)
@@ -292,10 +300,12 @@
           (type (form-c-type-of form)))
       (ecase type
         ((:void))
-        ((:int32 :double)
+        ((:int32)
          (format stream "~A" value))
+        ((:double)
+         (format stream "~,,,,,,'EE" value))
         ((:float)
-         (format stream "~Af" value))
+         (format stream "~,,,,,,'EEf" value))
         ((:uint32)
          (format stream "~AU" value))
         ((:boolean)
@@ -304,11 +314,15 @@
          (format stream "((~A)~A)" (c-type-string type) value)))))
 
   ;; Assignment
-  (:method ((form setq-form) stream &key)
-    (let ((gpu-var (ensure-gpu-var (variable-of form))))
-      (princ (generate-var-ref gpu-var) stream))
-    (princ " = " stream)
-    (emit-c-code (value-of form) stream))
+  (:method ((form setq-form) stream &key merged-index merged-node)
+    (cond (merged-index
+           (assert (is-merged-assignment? form))
+           (awhen (= merged-index 0)
+             (emit-assignment-code stream (variable-of form) merged-node)))
+          ((is-merged-assignment? form)
+           (emit-c-code (value-of form) stream))
+          (t
+           (emit-assignment-code stream (variable-of form) (value-of form)))))
 
   (:method ((form walked-lexical-variable-reference-form) stream &key)
     (let ((gpu-var (ensure-gpu-var form)))
@@ -478,3 +492,8 @@
 
   
   )
+
+(def function emit-merged-assignment (stream form index node)
+  (let ((parent (parent-of form)))
+    (check-type parent (or multiple-value-setq-form setq-form))
+    (emit-c-code form stream :merged-index index :merged-node node)))

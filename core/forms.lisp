@@ -151,6 +151,20 @@
   `(inline-verbatim (,form-c-type :expression? ,is-expression?)
      ,@(recurse-on-body body)))
 
+;;; AND & OR - parse them as ordinary function calls
+
+(def (walker :in gpu-target) or
+  (with-form-object (appl 'free-application-form -parent-
+                          :operator 'or)
+    (setf (arguments-of appl)
+          (mapcar (lambda (f) (recurse f appl)) (rest -form-)))))
+
+(def (walker :in gpu-target) and
+  (with-form-object (appl 'free-application-form -parent-
+                          :operator 'and)
+    (setf (arguments-of appl)
+          (mapcar (lambda (f) (recurse f appl)) (rest -form-)))))
+
 ;;; Macros
 
 (def generic expand-gpu-macro (name form env)
@@ -181,6 +195,12 @@
          ,@code))))
 
 ;;;
+
+(def function has-merged-assignment? (form)
+  (atypecase (parent-of form)
+    ((or multiple-value-setq-form setq-form)
+     (is-merged-assignment? it))
+    (t nil)))
 
 (def function ensure-gpu-var (ref)
   (unless (typep ref 'walked-lexical-variable-reference-form)
