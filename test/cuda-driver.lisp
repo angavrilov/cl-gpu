@@ -151,6 +151,8 @@
                              (aref buf 6) (gpu::inline-verbatim (:uint32)
                                             "(unsigned)" baz)
                              (aref bar 1 1 1) (+ foo *test-global-val*)))))))
+      (setf *last-tested-module* module)
+      (setf *current-gpu-target* :cuda)
       (cl-gpu::compile-gpu-module module)
       (let* ((instance (cl-gpu::get-module-instance module))
              (items (cl-gpu::gpu-module-instance-item-vector instance))
@@ -165,3 +167,6 @@
                    (list ptr 48 6 48 24 4 ptr)))
         (is (= (bref baz 1 1 1) 1.2))))))
 
+(def test test/cuda-driver/compute ()
+  (with-fixture cuda-context
+    (test/translator/compute :cuda)))

@@ -357,7 +357,7 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
     "new" "operator" "private" "protected" "public" "reinterpret_cast"
     "static_cast" "template" "this" "throw" "true" "try" "typeid"
     "typename" "using" "virtual" "wchar_t" "typeof"
-    "nil" "t")
+    "nil" "t" "_t")
 
 (def function make-c-name-table ()
   (copy-hash-table *unique-id-template* :test #'equal))

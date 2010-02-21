@@ -321,7 +321,7 @@
          (format stream "~AU" value))
         ((:boolean)
          (princ (if value "1" "0") stream))
-        ((:int8 :uint8 :int16 :uint16)
+        ((:int8 :uint8 :int16 :uint16 :int64 :uint64)
          (format stream "((~A)~A)" (c-type-string type) value)))))
 
   ;; Assignment
@@ -338,6 +338,17 @@
   (:method ((form walked-lexical-variable-reference-form) stream &key)
     (let ((gpu-var (ensure-gpu-var form)))
       (princ (generate-var-ref gpu-var) stream)))
+
+  ;; Cast
+  (:method ((form the-form) stream &key)
+    (if (or (typep form 'cast-form)
+            (not (equal (form-c-type-of form)
+                        (form-c-type-of (value-of form)))))
+        (progn
+          (format stream "((~A)" (c-type-string (form-c-type-of form)))
+          (emit-c-code (value-of form) stream)
+          (princ ")" stream))
+        (emit-c-code (value-of form) stream)))
 
   ;; Verbatim inline code
   (:method ((form verbatim-code-form) stream &key)
@@ -490,14 +501,16 @@
            (princ ") {" stream)
            (with-indented-c-code
              (emit-code-newline stream)
-             (emit-c-code (then-of form) stream :inside-block? t))
+             (emit-c-code (then-of form) stream :inside-block? t)
+             (princ ";" stream))
            (emit-code-newline stream)
            (princ "}" stream)
            (unless (nop-form? (else-of form))
              (princ " else {" stream)
              (with-indented-c-code
                (emit-code-newline stream)
-               (emit-c-code (else-of form) stream :inside-block? t))
+               (emit-c-code (else-of form) stream :inside-block? t)
+               (princ ";" stream))
              (emit-code-newline stream)
              (princ "}" stream)))))
 
@@ -509,12 +522,12 @@
 (def function emit-merged-assignment (stream form index node)
   (let ((parent (parent-of form)))
     (check-type parent (or multiple-value-setq-form setq-form))
-    (emit-c-code form stream :merged-index index :merged-node node)))
+    (emit-c-code parent stream :merged-index index :merged-node node)))
 
-(def function emit-separated (stream args op &key (single-pfix ""))
+(def function emit-separated (stream args op &key single-pfix)
   (assert args)
   (princ "(" stream)
-  (when (null (rest args))
+  (when (and single-pfix (null (rest args)))
     (princ single-pfix stream))
   (emit-c-code (first args) stream)
   (dolist (arg (rest args))

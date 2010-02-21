@@ -319,7 +319,7 @@
   :typechecker ensure-bitwise-result)
 
 (def gpu-macro logeqv (&rest args)
-  `(lognot (logxor ,@args)))
+  `(lognot (logxor ,@(mapcar (lambda (a) `(lognot ,a)) args))))
 
 (def bitwise-builtin lognot (arg)
   (code "~" arg))
@@ -395,7 +395,7 @@
           (base-val
            (emit "(log~A(" tail-tag)
            (code arg)
-           (emit ")/~,,,,,,'EG~A)"
+           (emit ")/~,,,,,,'EE~A)"
                  (log (float base-val 1.0d0)) tail-tag))
           (base
            (emit "(log~A(" tail-tag)
@@ -416,7 +416,7 @@
           (base-val
            (emit "exp~A(" tail-tag)
            (code power)
-           (emit "*~,,,,,,'EG~A)"
+           (emit "*~,,,,,,'EE~A)"
                  (log (float base-val 1.0d0)) tail-tag))
           (t
            (emit "exp~A(" tail-tag)
@@ -429,10 +429,15 @@
 (def form-attribute-accessor combined-arg-type
   :forms application-form)
 
+(def function round-function-type (form)
+  (acase (or (combined-arg-type-of form)
+            (form-c-type-of form))
+    ((:float :double) it)
+    (t :float)))
+
 (def definer float-round-builtin (name c-name)
   `(def float-builtin ,name (arg &optional divisor)
-     (let ((type (or (combined-arg-type-of -form-)
-                     (form-c-type-of -form-))))
+     (let ((type (round-function-type -form-)))
        (emit "~A~A(" ,c-name (float-name-tag type))
        (code arg)
        (when divisor
@@ -460,10 +465,12 @@
      (def type-computer ,name (arg &optional divisor)
        (int-round-builtin-type -form- -arguments-/type -upper-type-))
      (def c-code-emitter ,name (arg &optional divisor)
-       (bind (((:values minv maxv)
-               (c-int-range (combined-arg-type-of -form-)))
-              (div-value
+       (bind ((div-value
                (constant-number-value divisor))
+              ((:values minv maxv)
+               (c-int-range (if (and (integerp div-value) (> div-value 0))
+                                (form-c-type-of arg)
+                                (combined-arg-type-of -form-))))
               ((:values power-2 mask-2)
                (power-of-two div-value)))
          (declare (ignorable maxv power-2 mask-2))
@@ -532,19 +539,18 @@
      (princ "{" stream)
      (with-indented-c-code
        (emit-code-newline stream)
-       (format stream "~A TmpV, BestV = " (c-type-string it))
-       (emit-c-code (first args) stream)
-       (princ ";" stream)
-       (emit-code-newline stream)
-       (dolist (arg (rest args))
-         (princ "TmpV = " stream)
-         (emit-c-code arg stream)
-         (princ ";" stream)
-         (emit-code-newline stream)
-         (format stream "if (TmpV ~A BestV) BestV = TmpV;" cmp)
-         (emit-code-newline stream))
+       (loop for arg in args and i from 0
+          do (progn
+               (format stream "~A TmpV~A = " (c-type-string it) i)
+               (emit-c-code arg stream)
+               (princ ";" stream)
+               (emit-code-newline stream)))
+       (loop for i from 1 below (length args)
+          do (progn
+               (format stream "if (TmpV~A ~A TmpV0) TmpV0 = TmpV~A;" i cmp i)
+               (emit-code-newline stream)))
        (when (has-merged-assignment? form)
-         (emit-merged-assignment stream form 0 "BestV")
+         (emit-merged-assignment stream form 0 "TmpV0")
          (princ ";" stream)))
      (emit-code-newline stream)
      (princ "}" stream))))

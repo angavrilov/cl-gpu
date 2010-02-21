@@ -19,5 +19,6 @@
   :components ((:module "test"
                 :components ((:file "utils" :depends-on ("package"))
                              (:file "buffers" :depends-on ("utils"))
-                             (:file "cuda-driver" :depends-on ("buffers"))
+                             (:file "translator" :depends-on ("buffers"))
+                             (:file "cuda-driver" :depends-on ("buffers" "translator"))
                              (:file "package")))))

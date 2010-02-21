@@ -31,6 +31,12 @@
               "__device__")
           (call-next-method)))
 
+(def layered-method c-type-string :in cuda-target (type)
+  (case type
+    (:int64 "long long")
+    (:uint64 "unsigned long long")
+    (otherwise (call-next-method))))
+
 (def layered-method c-type-size :in cuda-target (type)
   (case type
     (:pointer +cuda-ptr-size+)
