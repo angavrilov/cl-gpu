@@ -172,16 +172,16 @@
              (item-type-of it))
          (form-c-type-of defn))))
 
-(def function verify-cast (src dest form &key (prefix "") (warn? t) error-on-warn? allow)
+(def function verify-cast (src dest form &key prefix (warn? t) error-on-warn? allow)
   (let ((status (or (member src allow)
                     (can-promote-type? src dest))))
     (cond ((or (null status)
                (and (eq status :warn) error-on-warn?))
            (error "Cannot cast ~S to ~S in ~A~S"
-                  src dest prefix (unwalk-form form)))
+                  src dest (or prefix "") (unwalk-form form)))
           ((and warn? (eq status :warn))
            (warn "Implicit cast of ~S to ~S in ~A~S"
-                 src dest prefix (unwalk-form form))))
+                 src dest (or prefix "") (unwalk-form form))))
     dest))
 
 (def function int-value-matches-type? (type value)
@@ -201,6 +201,25 @@
   (unless (typep arr 'walked-lexical-variable-reference-form)
     (error "Must be a variable: ~S" (unwalk-form arr)))
   (verify-array arr))
+
+;;; Utilities for builtins
+
+(def function find-common-type (arg-types type-table)
+  (let ((index (reduce #'max
+                       (mapcar (lambda (atype)
+                                 (or (position atype type-table) 0))
+                               arg-types)
+                       :initial-value 0)))
+    (elt type-table index)))
+
+(def function ensure-common-type (arg-types form &key prefix types)
+  (aprog1 (find-common-type arg-types types)
+    (dolist (arg arg-types)
+      (verify-cast arg it form :prefix prefix))))
+
+(def function splice-constant-arg (form value)
+  (with-form-object (const 'constant-form form :value value)
+    (push const (arguments-of form))))
 
 ;;; Local var creation
 

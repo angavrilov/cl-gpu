@@ -8,27 +8,6 @@
 
 (deflayer gpu-target)
 
-;; Array functions - they make sense on the GPU side.
-
-(def (function ei) array-raw-extent (arr)
-  "Returns the raw size of a pitched array."
-  (array-total-size arr))
-
-(def (function ei) array-raw-stride (arr idx)
-  "Returns the raw stride of a pitched array."
-  (loop with prod = 1
-     for i from (1+ idx) below (array-rank arr)
-     do (setf prod (* prod (array-dimension arr i)))
-     finally (return prod)))
-
-(def (function ei) raw-aref (arr index)
-  "Access a pitched array with a raw index."
-  (row-major-aref arr index))
-
-(def (function ei) (setf raw-aref) (value arr index)
-  "Access a pitched array with a raw index."
-  (setf (row-major-aref arr index) value))
-
 ;; Some ad-hoc attribute definitions
 
 (def form-attribute-accessor form-c-type)
@@ -220,6 +199,17 @@
   (aprog1 (ensure-constant obj)
     (unless (typep it 'integer)
       (error "Must be an integer constant: ~S" it))))
+
+(def function constant-number-value (form)
+  (and (typep form 'constant-form)
+       (numberp (value-of form))
+       (value-of form)))
+
+(def function power-of-two (value)
+  (if (and (integerp value)
+           (> value 0)
+           (= (logand value (1- value)) 0))
+      (values (round (log value 2)) (1- value))))
 
 (def function nil-constant? (obj)
   (and (typep obj 'constant-form)

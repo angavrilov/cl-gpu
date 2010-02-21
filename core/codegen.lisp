@@ -294,6 +294,17 @@
     (emit-assn-c-code (operator-of form) form stream))
 
   ;; Constants
+  (:method ((form number) stream &key)
+    (format stream "~A" form))
+
+  (:method ((form string) stream &key)
+    (princ form stream))
+
+  (:method ((form single-float) stream &key)
+    (format stream "~,,,,,,'EEf" form))
+
+  (:method ((form double-float) stream &key)
+    (format stream "~,,,,,,'EE" form))
 
   (:method ((form constant-form) stream &key)
     (let ((value (value-of form))
@@ -493,7 +504,20 @@
   
   )
 
+;;; Utilities
+
 (def function emit-merged-assignment (stream form index node)
   (let ((parent (parent-of form)))
     (check-type parent (or multiple-value-setq-form setq-form))
     (emit-c-code form stream :merged-index index :merged-node node)))
+
+(def function emit-separated (stream args op &key (single-pfix ""))
+  (assert args)
+  (princ "(" stream)
+  (when (null (rest args))
+    (princ single-pfix stream))
+  (emit-c-code (first args) stream)
+  (dolist (arg (rest args))
+    (princ op stream)
+    (emit-c-code arg stream))
+  (princ ")" stream))

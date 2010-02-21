@@ -6,6 +6,36 @@
 
 (in-package :cl-gpu)
 
+;;; New builtin function definitions
+
+;; Array functions - they make sense on the GPU side.
+
+(def (function ei) array-raw-extent (arr)
+  "Returns the raw size of a pitched array."
+  (array-total-size arr))
+
+(def (function ei) array-raw-stride (arr idx)
+  "Returns the raw stride of a pitched array."
+  (loop with prod = 1
+     for i from (1+ idx) below (array-rank arr)
+     do (setf prod (* prod (array-dimension arr i)))
+     finally (return prod)))
+
+(def (function ei) raw-aref (arr index)
+  "Access a pitched array with a raw index."
+  (row-major-aref arr index))
+
+(def (function ei) (setf raw-aref) (value arr index)
+  "Access a pitched array with a raw index."
+  (setf (row-major-aref arr index) value))
+
+;; Misc
+
+(declaim (inline nonzerop))
+(def (function e) nonzerop (arg)
+  (not (zerop arg)))
+
+
 ;;; AREF
 
 (def type-computer aref (arr &rest indexes)
@@ -129,77 +159,48 @@
 
 ;;; Arithmetics
 
-(def function arithmetic-result-type (arg-types)
-  (cond ((member :double arg-types) :double)
-        ((member :float arg-types) :float)
-        ((member :uint64 arg-types) :uint64)
-        ((member :int64 arg-types) :int64)
-        ((member :uint32 arg-types) :uint32)
-        (t :int32)))
-
 (def function ensure-arithmetic-result (arg-types form &key prefix)
-  (aprog1 (arithmetic-result-type arg-types)
-    (dolist (arg arg-types)
-      (verify-cast arg it form :prefix prefix))))
+  (ensure-common-type arg-types form :prefix prefix
+                      :types '(:int32 :uint32 :int64 :uint64 :float :double)))
 
-(def function splice-constant-arg (form value)
-  (with-form-object (const 'constant-form form :value value)
-    (push const (arguments-of form))))
+(def definer delimited-builtin (name op &key zero single-pfix
+                                      (typechecker 'ensure-arithmetic-result))
+  `(progn
+     (def type-computer ,name (&rest args)
+       (if args
+           (,typechecker args/type -form-)
+           (propagate-c-types (splice-constant-arg -form- ,zero)
+                              :upper-type -upper-type-)))
+     (def c-code-emitter ,name (&rest args)
+       (emit-separated -stream- args ,op :single-pfix ,single-pfix))))
 
-(def definer arithmetic-type-computer (name &key zero)
-  `(def type-computer ,name (&rest args)
-     (if args
-         (ensure-arithmetic-result args/type -form-)
-         (propagate-c-types (splice-constant-arg -form- ,zero)
-                            :upper-type -upper-type-))))
+(def function ensure-div-result-type (arg-types form)
+  (if (cdr arg-types)
+      (ensure-arithmetic-result arg-types form)
+      (ensure-common-type arg-types form :types '(:float :double))))
 
-(def arithmetic-type-computer + :zero 0)
-(def arithmetic-type-computer - :zero 0)
-(def arithmetic-type-computer * :zero 1)
-(def arithmetic-type-computer / :zero 1.0)
+(def delimited-builtin + "+" :zero 0)
+(def delimited-builtin - "-" :zero 0 :single-pfix "-")
+(def delimited-builtin * "*" :zero 1)
+(def delimited-builtin / "/" :zero 1.0
+  :typechecker ensure-div-result-type
+  :single-pfix (if (eq (form-c-type-of -form-) :double)
+                   "1.0/" "1.0f/"))
 
-(def type-computer 1+ (arg)
-  (ensure-arithmetic-result (list arg/type) -form-))
+(def definer arithmetic-builtin (name args &body code)
+  `(progn
+     (def type-computer ,name ,args
+       (ensure-arithmetic-result -arguments-/type -form-))
+     (def c-code-emitter ,name ,args
+       ,@code)))
 
-(def type-computer 1- (arg)
-  (ensure-arithmetic-result (list arg/type) -form-))
-
-(def function emit-separated (stream args op &key (single-pfix ""))
-  (assert args)
-  (princ "(" stream)
-  (when (null (rest args))
-    (princ single-pfix stream))
-  (emit-c-code (first args) stream)
-  (dolist (arg (rest args))
-    (princ op stream)
-    (emit-c-code arg stream))
-  (princ ")" stream))
-
-(def c-code-emitter + (&rest args)
-  (emit-separated -stream- args "+"))
-
-(def c-code-emitter - (&rest args)
-  (emit-separated -stream- args "-" :single-pfix "-"))
-
-(def c-code-emitter * (&rest args)
-  (emit-separated -stream- args "*"))
-
-(def c-code-emitter / (&rest args)
-  (emit-separated -stream- args "/"
-                  :single-pfix
-                  (if (eq (form-c-type-of -form-) :double)
-                      "1.0/" "1.0f/")))
-
-(def c-code-emitter 1+ (arg)
+(def arithmetic-builtin 1+ (arg)
   (code "(" arg "+1)"))
 
-(def c-code-emitter 1- (arg)
+(def arithmetic-builtin 1- (arg)
   (code "(" arg "-1)"))
 
-(def type-computer abs (arg)
-  (ensure-arithmetic-result (list arg/type) -form-))
-
-(def c-code-emitter abs (arg)
+(def arithmetic-builtin abs (arg)
   (emit "~A("
         (ecase (form-c-type-of -form-)
           (:int32 "abs")
@@ -229,10 +230,6 @@
 (def c-code-emitter zerop (arg)
   (code "(" arg "==0)"))
 
-(declaim (inline nonzerop))
-(def (function e) nonzerop (arg)
-  (not (zerop arg)))
-
 (def type-computer nonzerop (arg)
   (ensure-arithmetic-result (list arg/type) -form-)
   :boolean)
@@ -254,7 +251,7 @@
                          collect `(,(car form) ,n1 ,n2))))))
       form))
 
-(def macro def-comparison-builtin (name operator &key any-type? any-count?)
+(def definer comparison-builtin (name operator &key any-type? any-count?)
   `(progn
      ,(if any-count?
           `(def gpu-macro ,name (&whole form &rest args)
@@ -268,15 +265,15 @@
      (def c-code-emitter ,name (arg1 arg2)
        (code "(" arg1 ,operator arg2 ")"))))
 
-(def-comparison-builtin > ">" :any-count? t)
-(def-comparison-builtin >= ">=" :any-count? t)
-(def-comparison-builtin = "==" :any-count? t)
-(def-comparison-builtin /= "!=" :any-count? :quadratic)
-(def-comparison-builtin < "<" :any-count? t)
-(def-comparison-builtin <= "<=" :any-count? t)
+(def comparison-builtin > ">" :any-count? t)
+(def comparison-builtin >= ">=" :any-count? t)
+(def comparison-builtin = "==" :any-count? t)
+(def comparison-builtin /= "!=" :any-count? :quadratic)
+(def comparison-builtin < "<" :any-count? t)
+(def comparison-builtin <= "<=" :any-count? t)
 
-(def-comparison-builtin eql "==" :any-type? t)
-(def-comparison-builtin eq "==" :any-type? t)
+(def comparison-builtin eql "==" :any-type? t)
+(def comparison-builtin eq "==" :any-type? t)
 
 (def type-computer and (&rest args)
   (dolist (atype args/type)
@@ -298,50 +295,99 @@
       (emit "0")
       (emit-separated -stream- args "||")))
 
+;;; Bitwise logic
+
+(def function ensure-bitwise-result (arg-types form &key prefix)
+  (aprog1 (ensure-arithmetic-result arg-types form :prefix prefix)
+    (when (member it '(:float :double))
+      (error "Floating-point arguments not allowed: ~S" (unwalk-form form)))))
+
+(def definer bitwise-builtin (name args &body code)
+  `(progn
+     (def type-computer ,name ,args
+       (ensure-bitwise-result -arguments-/type -form-))
+     (def c-code-emitter ,name ,args
+       ,@code)))
+
+(def delimited-builtin logand "&" :zero -1
+  :typechecker ensure-bitwise-result)
+
+(def delimited-builtin logior "|" :zero 0
+  :typechecker ensure-bitwise-result)
+
+(def delimited-builtin logxor "^" :zero 0
+  :typechecker ensure-bitwise-result)
+
+(def gpu-macro logeqv (&rest args)
+  `(lognot (logxor ,@args)))
+
+(def bitwise-builtin lognot (arg)
+  (code "~" arg))
+
+(def bitwise-builtin logandc1 (arg1 arg2)
+  (code "(~" arg1 "&" arg2 ")"))
+
+(def bitwise-builtin logandc2 (arg1 arg2)
+  (code "(" arg1 "&~" arg2 ")"))
+
+(def bitwise-builtin lognand (arg1 arg2)
+  (code "~(" arg1 "&" arg2 ")"))
+
+(def bitwise-builtin lognor (arg1 arg2)
+  (code "~(" arg1 "|" arg2 ")"))
+
+(def bitwise-builtin logorc1 (arg1 arg2)
+  (code "(~" arg1 "|" arg2 ")"))
+
+(def bitwise-builtin logorc2 (arg1 arg2)
+  (code "(" arg1 "|~" arg2 ")"))
+
+
 ;;; Trigonometry etc
 
 (def function ensure-float-result (arg-types form &key prefix)
-  (aprog1 (if (member :double arg-types) :double :float)
-    (dolist (arg arg-types)
-      (verify-cast arg it form :prefix prefix))))
+  (ensure-common-type arg-types form :prefix prefix
+                      :types '(:float :double)))
 
-(def definer float-gpu-builtin (name float-c-name double-c-name)
+(def function float-name-tag (type)
+  (ecase type (:double "") (:float "f")))
+
+(def definer float-function-builtin (name c-name)
   `(progn
      (def type-computer ,name (arg)
        (ensure-float-result (list arg/type) -form-))
      (def c-code-emitter ,name (arg)
-       (ecase (form-c-type-of -form-)
-         (:double (emit ,double-c-name))
-         (:float (emit ,float-c-name)))
-       (code "(" arg ")"))))
+       (emit "~A~A(" ,c-name (float-name-tag (form-c-type-of -form-)))
+       (code arg ")"))))
 
-(def float-gpu-builtin sin "sinf" "sin")
-(def float-gpu-builtin asin "asinf" "asin")
-(def float-gpu-builtin sinh "sinhf" "sinh")
-(def float-gpu-builtin asinh "asinhf" "asinh")
+(def float-function-builtin sin "sin")
+(def float-function-builtin asin "asin")
+(def float-function-builtin sinh "sinh")
+(def float-function-builtin asinh "asinh")
 
-(def float-gpu-builtin cos "cosf" "cos")
-(def float-gpu-builtin acos "acosf" "acos")
-(def float-gpu-builtin cosh "coshf" "cosh")
-(def float-gpu-builtin acosh "acoshf" "acosh")
+(def float-function-builtin cos "cos")
+(def float-function-builtin acos "acos")
+(def float-function-builtin cosh "cosh")
+(def float-function-builtin acosh "acosh")
 
-(def float-gpu-builtin tan "tanf" "tan")
-(def float-gpu-builtin atan "atanf" "atan")
-(def float-gpu-builtin tanh "tanhf" "tanh")
-(def float-gpu-builtin atanh "atanhf" "atanh")
+(def float-function-builtin tan "tan")
+(def float-function-builtin atan "atan")
+(def float-function-builtin tanh "tanh")
+(def float-function-builtin atanh "atanh")
 
-(def float-gpu-builtin exp "expf" "exp")
-(def float-gpu-builtin sqrt "sqrtf" "sqrt")
+(def float-function-builtin exp "exp")
+(def float-function-builtin sqrt "sqrt")
 
-(def type-computer log (val &optional base)
-  (ensure-float-result (flatten (list val/type base/type)) -form-))
+(def definer float-builtin (name args &body code)
+  `(progn
+     (def type-computer ,name ,args
+       (ensure-float-result -arguments-/type -form-))
+     (def c-code-emitter ,name ,args
+       ,@code)))
 
-(def c-code-emitter log (arg &optional base)
-  (let* ((ftype (form-c-type-of -form-))
-         (tail-tag (ecase ftype (:double "") (:float "f")))
-         (base-val (and (typep base 'constant-form)
-                        (numberp (value-of base))
-                        (value-of base))))
+(def float-builtin log (arg &optional base)
+  (let* ((tail-tag (float-name-tag (form-c-type-of -form-)))
+         (base-val (constant-number-value base)))
     (cond ((and base-val
                 (or (= base-val 10) (= base-val 2)))
            (emit "log~A~A(" base-val tail-tag)
@@ -360,15 +406,9 @@
            (emit "log~A(" tail-tag)
            (code arg ")")))))
 
-(def type-computer expt (base power)
-  (ensure-float-result (list base/type power/type) -form-))
-
-(def c-code-emitter expt (base power)
-  (let* ((ftype (form-c-type-of -form-))
-         (tail-tag (ecase ftype (:double "") (:float "f")))
-         (base-val (and (typep base 'constant-form)
-                        (numberp (value-of base))
-                        (value-of base))))
+(def float-builtin expt (base power)
+  (let* ((tail-tag (float-name-tag (form-c-type-of -form-)))
+         (base-val (constant-number-value base)))
     (cond ((and base-val
                 (or (= base-val 10) (= base-val 2)))
            (emit "exp~A~A(" base-val tail-tag)
@@ -383,6 +423,82 @@
            (code power)
            (emit "*log~A(" tail-tag)
            (code base "))")))))
+
+;;; Rounding
+
+(def form-attribute-accessor combined-arg-type
+  :forms application-form)
+
+(def definer float-round-builtin (name c-name)
+  `(def float-builtin ,name (arg &optional divisor)
+     (let ((type (or (combined-arg-type-of -form-)
+                     (form-c-type-of -form-))))
+       (emit "~A~A(" ,c-name (float-name-tag type))
+       (code arg)
+       (when divisor
+         (emit "/(~A)" (c-type-string type))
+         (code divisor))
+       (code ")"))))
+
+(def float-round-builtin ffloor "floor")
+(def float-round-builtin fceiling "ceil")
+(def float-round-builtin ftruncate "trunc")
+(def float-round-builtin fround "round")
+
+(def function int-round-builtin-type (form args upper-type)
+  (let ((atype (ensure-arithmetic-result args form)))
+    (setf (combined-arg-type-of form) atype)
+    (case atype
+      ((:int32 :uint32 :int64 :uint64) atype)
+      (t
+       (case upper-type
+         ((:int32 :uint32 :int64 :uint64) upper-type)
+         (t :int32))))))
+
+(def definer int-round-builtin (name fallback &body code)
+  `(progn
+     (def type-computer ,name (arg &optional divisor)
+       (int-round-builtin-type -form- -arguments-/type -upper-type-))
+     (def c-code-emitter ,name (arg &optional divisor)
+       (bind (((:values minv maxv)
+               (c-int-range (combined-arg-type-of -form-)))
+              (div-value
+               (constant-number-value divisor))
+              ((:values power-2 mask-2)
+               (power-of-two div-value)))
+         (declare (ignorable maxv power-2 mask-2))
+         (cond ((and minv (or (null divisor)
+                              (eql div-value 1)))
+                (recurse arg))
+               ,@code
+               (t
+                (emit "(~A)" (c-type-string (form-c-type-of -form-)))
+                (emit-call-c-code ',fallback -form- -stream-)))))))
+
+(def int-round-builtin floor ffloor
+  ((and minv power-2)
+   (code "(" arg ">>" power-2 ")"))
+  ((eql minv 0)
+   (code "(" arg "/" divisor ")")))
+
+(def int-round-builtin ceiling fceiling
+  ((and minv power-2)
+   (code "((" arg "+" mask-2 ")>>" power-2 ")"))
+  ((and (eql minv 0) div-value (> div-value 0))
+   (code "((" arg "+" (1- div-value) ")/" divisor ")")))
+
+(def int-round-builtin truncate ftruncate
+  ((and (eql minv 0) power-2)
+   (code "(" arg ">>" power-2 ")"))
+  ((eql minv 0)
+   (code "(" arg "/" divisor ")")))
+
+(def int-round-builtin round fround
+  ((and minv power-2)
+   (code "((" arg "+" (/ div-value 2) ")>>" power-2 ")"))
+  ((and (eql minv 0) div-value (> div-value 0))
+   (code "((" arg "+" (floor div-value 2) ")/" divisor ")")))
+
 
 ;;; MIN & MAX
 
