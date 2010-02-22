@@ -43,8 +43,8 @@
   (unless (= (length (dimension-mask-of (ensure-gpu-var arr)))
              (length indexes))
     (error "Incorrect array index count in ~S" (unwalk-form -form-)))
-  (loop for itype in indexes/type and idx in indexes
-     do (verify-cast itype :uint32 idx :prefix "aref index "
+  (loop for idx in indexes
+     do (verify-cast idx :uint32 -form- :prefix "index "
                      :allow '(:int32) :error-on-warn? t))
   (second arr/type))
 
@@ -59,8 +59,8 @@
     (recurse -value- :upper-type (second arr/type))))
 
 (def type-computer (setf aref) (arr &rest indexes)
-  (loop for itype in indexes/type and idx in indexes
-     do (verify-cast itype :uint32 idx :prefix "aref index "
+  (loop for idx in indexes
+     do (verify-cast idx :uint32 -form- :prefix "index "
                      :allow '(:int32) :error-on-warn? t))
   (verify-cast -value-/type (second arr/type) -form-)
   (if (eq -upper-type- :void) :void (second arr/type)))
@@ -89,7 +89,7 @@
 
 (def type-computer raw-aref (arr index)
   (verify-array-var arr)
-  (verify-cast index/type :uint32 index :prefix "raw-aref index "
+  (verify-cast index :uint32 -form- :prefix "index "
                :allow '(:int32) :error-on-warn? t)
   (second arr/type))
 
@@ -100,7 +100,7 @@
     (recurse -value- :upper-type (second arr/type))))
 
 (def type-computer (setf raw-aref) (arr index)
-  (verify-cast index/type :uint32 index :prefix "raw-aref index "
+  (verify-cast index :uint32 -form- :prefix "index "
                :allow '(:int32) :error-on-warn? t)
   (verify-cast -value-/type (second arr/type) -form-)
   (if (eq -upper-type- :void) :void (second arr/type)))
@@ -159,8 +159,8 @@
 
 ;;; Arithmetics
 
-(def function ensure-arithmetic-result (arg-types form &key prefix)
-  (ensure-common-type arg-types form :prefix prefix
+(def function ensure-arithmetic-result (args-or-types form &key prefix)
+  (ensure-common-type args-or-types form :prefix prefix
                       :types '(:int32 :uint32 :int64 :uint64 :float :double)))
 
 (def definer delimited-builtin (name op &key zero single-pfix
@@ -168,16 +168,16 @@
   `(progn
      (def type-computer ,name (&rest args)
        (if args
-           (,typechecker args/type -form-)
+           (,typechecker args -form-)
            (propagate-c-types (splice-constant-arg -form- ,zero)
                               :upper-type -upper-type-)))
      (def c-code-emitter ,name (&rest args)
        (emit-separated -stream- args ,op :single-pfix ,single-pfix))))
 
-(def function ensure-div-result-type (arg-types form)
-  (if (cdr arg-types)
-      (ensure-arithmetic-result arg-types form)
-      (ensure-common-type arg-types form :types '(:float :double))))
+(def function ensure-div-result-type (args-or-types form)
+  (if (cdr args-or-types)
+      (ensure-arithmetic-result args-or-types form)
+      (ensure-common-type args-or-types form :types '(:float :double))))
 
 (def delimited-builtin + "+" :zero 0)
 (def delimited-builtin - "-" :zero 0 :single-pfix "-")
@@ -190,7 +190,7 @@
 (def definer arithmetic-builtin (name args &body code)
   `(progn
      (def type-computer ,name ,args
-       (ensure-arithmetic-result -arguments-/type -form-))
+       (ensure-arithmetic-result -arguments- -form-))
      (def c-code-emitter ,name ,args
        ,@code)))
 
@@ -218,20 +218,20 @@
   `(> ,arg 0))
 
 (def type-computer not (arg)
-  (verify-cast arg/type :boolean -form-))
+  (verify-cast arg :boolean -form-))
 
 (def c-code-emitter not (arg)
   (code "!" arg))
 
 (def type-computer zerop (arg)
-  (ensure-arithmetic-result (list arg/type) -form-)
+  (ensure-arithmetic-result (list arg) -form-)
   :boolean)
 
 (def c-code-emitter zerop (arg)
   (code "(" arg "==0)"))
 
 (def type-computer nonzerop (arg)
-  (ensure-arithmetic-result (list arg/type) -form-)
+  (ensure-arithmetic-result (list arg) -form-)
   :boolean)
 
 (def c-code-emitter nonzerop (arg)
@@ -259,8 +259,8 @@
      (def type-computer ,name (arg1 arg2)
        ,(if any-type?
             `(or (equal arg1/type arg2/type)
-                 (ensure-arithmetic-result (list arg1/type arg2/type) -form-))
-            `(ensure-arithmetic-result (list arg1/type arg2/type) -form-))
+                 (ensure-arithmetic-result -arguments- -form-))
+            `(ensure-arithmetic-result -arguments- -form-))
        :boolean)
      (def c-code-emitter ,name (arg1 arg2)
        (code "(" arg1 ,operator arg2 ")"))))
@@ -276,8 +276,8 @@
 (def comparison-builtin eq "==" :any-type? t)
 
 (def type-computer and (&rest args)
-  (dolist (atype args/type)
-    (verify-cast atype :boolean -form-))
+  (dolist (arg args)
+    (verify-cast arg :boolean -form-))
   :boolean)
 
 (def c-code-emitter and (&rest args)
@@ -286,8 +286,8 @@
       (emit-separated -stream- args "&&")))
 
 (def type-computer or (&rest args)
-  (dolist (atype args/type)
-    (verify-cast atype :boolean -form-))
+  (dolist (arg args)
+    (verify-cast arg :boolean -form-))
   :boolean)
 
 (def c-code-emitter or (&rest args)
@@ -297,15 +297,15 @@
 
 ;;; Bitwise logic
 
-(def function ensure-bitwise-result (arg-types form &key prefix)
-  (aprog1 (ensure-arithmetic-result arg-types form :prefix prefix)
+(def function ensure-bitwise-result (args-or-types form &key prefix)
+  (aprog1 (ensure-arithmetic-result args-or-types form :prefix prefix)
     (when (member it '(:float :double))
       (error "Floating-point arguments not allowed: ~S" (unwalk-form form)))))
 
 (def definer bitwise-builtin (name args &body code)
   `(progn
      (def type-computer ,name ,args
-       (ensure-bitwise-result -arguments-/type -form-))
+       (ensure-bitwise-result -arguments- -form-))
      (def c-code-emitter ,name ,args
        ,@code)))
 
@@ -345,8 +345,8 @@
 
 ;;; Trigonometry etc
 
-(def function ensure-float-result (arg-types form &key prefix)
-  (ensure-common-type arg-types form :prefix prefix
+(def function ensure-float-result (args-or-types form &key prefix)
+  (ensure-common-type args-or-types form :prefix prefix
                       :types '(:float :double)))
 
 (def function float-name-tag (type)
@@ -355,7 +355,7 @@
 (def definer float-function-builtin (name c-name)
   `(progn
      (def type-computer ,name (arg)
-       (ensure-float-result (list arg/type) -form-))
+       (ensure-float-result -arguments- -form-))
      (def c-code-emitter ,name (arg)
        (emit "~A~A(" ,c-name (float-name-tag (form-c-type-of -form-)))
        (code arg ")"))))
@@ -381,7 +381,7 @@
 (def definer float-builtin (name args &body code)
   `(progn
      (def type-computer ,name ,args
-       (ensure-float-result -arguments-/type -form-))
+       (ensure-float-result -arguments- -form-))
      (def c-code-emitter ,name ,args
        ,@code)))
 
@@ -463,7 +463,7 @@
 (def definer int-round-builtin (name fallback &body code)
   `(progn
      (def type-computer ,name (arg &optional divisor)
-       (int-round-builtin-type -form- -arguments-/type -upper-type-))
+       (int-round-builtin-type -form- -arguments- -upper-type-))
      (def c-code-emitter ,name (arg &optional divisor)
        (bind ((div-value
                (constant-number-value divisor))
@@ -563,7 +563,7 @@
 (def type-computer min (&rest args)
   (when (null args)
     (error "Cannot use MIN without arguments."))
-  (ensure-arithmetic-result args/type -form-))
+  (ensure-arithmetic-result args -form-))
 
 (def c-code-emitter min (&rest args)
   (emit-minmax-code -stream- -form- "<" "fminf" "fmin" args))
@@ -576,7 +576,7 @@
 (def type-computer max (&rest args)
   (when (null args)
     (error "Cannot use MAX without arguments."))
-  (ensure-arithmetic-result args/type -form-))
+  (ensure-arithmetic-result args -form-))
 
 (def c-code-emitter max (&rest args)
   (emit-minmax-code -stream- -form- ">" "fmaxf" "fmax" args))

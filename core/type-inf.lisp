@@ -172,17 +172,34 @@
              (item-type-of it))
          (form-c-type-of defn))))
 
-(def function verify-cast (src dest form &key prefix (warn? t) error-on-warn? allow)
-  (let ((status (or (member src allow)
-                    (can-promote-type? src dest))))
+(def function ensure-c-type-of (obj)
+  (typecase obj
+    (walked-form (form-c-type-of obj))
+    (t obj)))
+
+(def function verify-cast (src-type-or-form dest-type form &key prefix (warn? t) error-on-warn? allow)
+  (let* ((stype (atypecase src-type-or-form
+                  (constant-form (propagate-c-types it :upper-type dest-type))
+                  (walked-form (form-c-type-of it))
+                  (t it)))
+         (status (or (member stype allow :test #'equal)
+                     (can-promote-type? stype dest-type))))
     (cond ((or (null status)
                (and (eq status :warn) error-on-warn?))
-           (error "Cannot cast ~S to ~S in ~A~S"
-                  src dest (or prefix "") (unwalk-form form)))
+           (error "Cannot cast ~S to ~S in ~A~@[~S~%Of form ~]~S"
+                  stype dest-type (or prefix "")
+                  (if (and (not (eq src-type-or-form form))
+                           (typep src-type-or-form 'walked-form))
+                      (unwalk-form src-type-or-form))
+                  (unwalk-form form)))
           ((and warn? (eq status :warn))
-           (warn "Implicit cast of ~S to ~S in ~A~S"
-                 src dest (or prefix "") (unwalk-form form))))
-    dest))
+           (warn "Implicit cast of ~S to ~S in ~A~@[~S~%Of form ~]~S"
+                 stype dest-type (or prefix "")
+                 (if (and (not (eq src-type-or-form form))
+                          (typep src-type-or-form 'walked-form))
+                     (unwalk-form src-type-or-form))
+                 (unwalk-form form))))
+    dest-type))
 
 (def function int-value-matches-type? (type value)
   (multiple-value-bind (min max) (c-int-range type)
@@ -205,11 +222,12 @@
 ;;; Utilities for builtins
 
 (def function find-common-type (arg-types type-table)
-  (let ((index (reduce #'max
-                       (mapcar (lambda (atype)
-                                 (or (position atype type-table) 0))
-                               arg-types)
-                       :initial-value 0)))
+  (let ((index
+         (reduce #'max
+                 (mapcar (lambda (atype)
+                           (or (position (ensure-c-type-of atype) type-table) 0))
+                         arg-types)
+                 :initial-value 0)))
     (elt type-table index)))
 
 (def function ensure-common-type (arg-types form &key prefix types)
