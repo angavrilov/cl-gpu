@@ -11,22 +11,28 @@
 ;; Some ad-hoc attribute definitions
 
 (def form-attribute-accessor form-c-type)
+
 (def form-attribute-accessor gpu-variable
   :type (or gpu-variable null) :forms name-definition-form)
+
 (def form-attribute-accessor assigned-to?
   :type boolean :forms (lexical-variable-binding-form
                         function-argument-form))
+
 (def form-attribute-accessor c-name
   :forms (go-tag-form block-form))
+
 (def form-attribute-accessor is-expression?
   :forms (implicit-progn-mixin if-form))
+
 (def form-attribute-accessor is-merged-assignment?
   :forms setq-form)
 
 ;; A wrapper for global variables
 
 (def (form-class :export nil) global-var-binding-form (name-definition-form)
-  ((gpu-variable :type (or gpu-variable null))))
+  ((gpu-variable :type (or gpu-variable null))
+   (assigned-to? nil :type boolean)))
 
 ;; Forced cast
 
@@ -302,7 +308,7 @@
                             ;; Create the argument
                             (let* ((new-id (make-symbol (string name)))
                                    (arg (with-form-object (arg 'auxiliary-function-argument-form tree
-                                                               :name new-id :usages nil)
+                                                               :name new-id)
                                           (setf (default-value-of arg)
                                                 (walk-form `(locally (declare (special ,name))
                                                               ,name)
@@ -315,7 +321,6 @@
                               arg)))))
                  (change-class form 'walked-lexical-variable-reference-form
                                :name (name-of arg-def) :definition arg-def)
-                 (push form (usages-of arg-def))
                  nil)))
         (map-ast (lambda (form)
                    (if (member form top-args)
@@ -331,16 +336,31 @@
                             (error "Binding special variables is not supported: ~S"
                                    (unwalk-form form)))
                           form)
-                         (setq-form
-                          (unless (typep (variable-of form) 'walked-lexical-variable-reference-form)
-                            (error "Setting non-lexical variables is not supported: ~S"
-                                   (unwalk-form form)))
-                          form)
                          (t form))))
                  tree)))))
 
+(def function mark-mutated-vars (tree)
+  (flet ((mark-var (variable form)
+           (unless (typep variable 'walked-lexical-variable-reference-form)
+             (error "Setting non-lexical variables is not supported: ~S"
+                    (unwalk-form form)))
+           (setf (assigned-to? (definition-of variable)) t)))
+    (map-ast (lambda (form)
+               (typecase form
+                 (setq-form
+                  (mark-var (variable-of form) form))
+                 (multiple-value-setq-form
+                  (dolist (var (variables-of form))
+                    (mark-var var form))))
+               form)
+             tree)))
+
 (def function preprocess-tree (tree global-vars)
-  (annotate-binding-usage (list* tree
-                                 (mapcar #'form-of global-vars)))
+  ;; Mark bindings that are destructively assigned to.
+  ;; This also checks absence of assignments to special vars.
+  (mark-mutated-vars tree)
+  ;; Convert global var refs to &aux args.
   (pull-global-refs tree)
+  ;; Collect the binding usage lists.
+  (annotate-binding-usage (list* tree (mapcar #'form-of global-vars)))
   tree)
