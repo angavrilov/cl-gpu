@@ -172,11 +172,6 @@
              (item-type-of it))
          (form-c-type-of defn))))
 
-(def function ensure-c-type-of (obj)
-  (typecase obj
-    (walked-form (form-c-type-of obj))
-    (t obj)))
-
 (def function verify-cast (src-type-or-form dest-type form &key prefix (warn? t) error-on-warn? allow)
   (let* ((stype (atypecase src-type-or-form
                   (constant-form (propagate-c-types it :upper-type dest-type))

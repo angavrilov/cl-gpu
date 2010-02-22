@@ -118,17 +118,48 @@
    (is-expression?)))
 
 (def (walker :in gpu-target) inline-verbatim
-  (destructuring-bind ((ret-type &key (expression? t)) &rest code)
+  (destructuring-bind ((ret-type &key statement?) &rest code)
       (rest -form-)
     (with-form-object (vcode 'verbatim-code-form -parent-
                              :form-c-type ret-type
-                             :is-expression? expression?)
+                             :is-expression? (not statement?))
       (setf (body-of vcode)
             (mapcar (lambda (form) (recurse form vcode)) code)))))
 
 (def unwalker verbatim-code-form (body form-c-type is-expression?)
-  `(inline-verbatim (,form-c-type :expression? ,is-expression?)
+  `(inline-verbatim (,form-c-type :statement? ,(not is-expression?))
      ,@(recurse-on-body body)))
+
+(def function parse-verbatim-flag (list-pos flags)
+  (ecase (value-of (car list-pos))
+    (:stmt (setf (getf flags :stmt) t))
+    (:return?
+     (setf (getf flags :return-nth) 0))
+    (:return
+     (setf (getf flags :return-nth) 0
+           (getf flags :force-return) t))
+    (:return-nth?
+     (setf (getf flags :return-nth) (cadr list-pos)
+           list-pos (cdr list-pos)))
+    (:return-nth
+     (setf (getf flags :return-nth) (cadr list-pos)
+           list-pos (cdr list-pos)
+           (getf flags :force-return) t)))
+  (values list-pos flags))
+
+(def macro do-verbatim-code ((item flags form) &body code)
+  (with-unique-names (list-pos)
+    `(let ((,flags nil))
+       (do ((,list-pos (body-of ,form) (cdr ,list-pos)))
+           ((null ,list-pos))
+         (symbol-macrolet ((,item (car ,list-pos)))
+           (if (and (typep ,item 'constant-form)
+                    (keywordp (value-of ,item)))
+               (setf (values ,list-pos ,flags)
+                     (parse-verbatim-flag ,list-pos ,flags))
+               (progn
+                 ,@code
+                 (setf ,flags nil))))))))
 
 ;;; AND & OR - parse them as ordinary function calls
 
@@ -214,6 +245,16 @@
 (def function nil-constant? (obj)
   (and (typep obj 'constant-form)
        (eq (value-of obj) nil)))
+
+(def function ensure-c-type-of (obj)
+  (typecase obj
+    (walked-form (form-c-type-of obj))
+    (t obj)))
+
+(def function make-lexical-binding (parent &key (name (make-symbol "_T")) initial-value c-type)
+  (with-form-object (binding 'lexical-variable-binding-form parent
+                             :name name :initial-value initial-value)
+    (setf (form-c-type-of binding) (ensure-c-type-of c-type))))
 
 (def function make-lexical-var (definition parent)
   (with-form-object (var `walked-lexical-variable-reference-form parent

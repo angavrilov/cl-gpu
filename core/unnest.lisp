@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file defines a transformation that pulls
+;;; forms mapped to C statements out of expressions.
+;;;
 
 (in-package :cl-gpu)
 
@@ -28,32 +32,47 @@
        ,@code))))
 
 (def layered-function is-statement? (form)
-  (:method ((form application-form))
+  ;; Built-in functions:
+  (:method ((form free-application-form))
     (is-statement-call? (operator-of form) form))
   (:method ((form setf-application-form))
     (is-statement-assn? (operator-of form) form))
-  ;; Built-in forms
-  (:method ((form block-form)) t)
-  (:method ((form lexical-variable-binder-form)) t)
+  ;; Special forms:
+  ;;  blocks
+  (:method ((form implicit-progn-mixin)) t)
+  ;; (implies: block catch eval-when progv tagbody locally .*let.* labels)
+  (:method ((form progn-form)) :defer) ; override
+  (:method ((form unwind-protect-form)) t)
+  (:method ((form multiple-value-prog1-form)) t)
+  ;;  if
+  (:method ((form if-form)) :defer)
+  ;;  control transfer
   (:method ((form return-from-form)) t)
+  (:method ((form go-form)) t)
+  (:method ((form go-tag-form)) t)
+  (:method ((form throw-form)) t)
+  ;;  function calls
+  ;(:method ((form application-form)) t)
+  ;(:method ((form multiple-value-call-form)) nil)
+  ;;  assignments
   (:method ((form setq-form)) nil)
   (:method ((form multiple-value-setq-form)) nil)
-  (:method ((form implicit-progn-mixin)) t)
-  (:method ((form tagbody-form)) t)
+  ;;  expressions
   (:method ((form the-form)) nil)
-  (:method ((form go-form)) t)
-  (:method ((form if-form)) :defer)
   (:method ((form constant-form)) nil)
   (:method ((form variable-reference-form)) nil)
+  (:method ((form load-time-value-form)) nil)
+  ;(:method ((form function-form)) nil)
+  ;;  inline C
   (:method ((form verbatim-code-form))
     (not (is-expression? form))))
 
-;;; Value return to side effects conversion
+;;; Convert value return to side effects
 
-(def macro push-assignments! (place varlist)
-  `(setf ,place (push-assignments ,place ,varlist)))
+(define-modify-macro push-assignments! (varlist) push-assignments)
 
 (def layered-function push-assignments (form varlist)
+  ;; Generic case
   (:method (form varlist)
     (if (= (length varlist) 1)
         (with-form-object (set 'setq-form (parent-of form) :value form)
@@ -69,6 +88,7 @@
                         varlist))
           (setf (form-c-type-of set) form))))
 
+  ;; Never-returning forms
   (:method ((form tagbody-form) varlist)
     (declare (ignore varlist))
     form)
@@ -81,6 +101,11 @@
     (declare (ignore varlist))
     form)
 
+  (:method ((form throw-form) varlist)
+    (declare (ignore varlist))
+    form)
+
+  ;; Control structures
   (:method ((form if-form) varlist)
     (push-assignments! (then-of form) varlist)
     (push-assignments! (else-of form) varlist)
@@ -104,6 +129,14 @@
   (:method ((form implicit-progn-mixin) varlist)
     (let ((tail (last (body-of form))))
       (push-assignments! (car tail) varlist))
+    form)
+
+  (:method ((form multiple-value-prog1-form) varlist)
+    (push-assignments! (first-form-of form) varlist)
+    form)
+
+  (:method ((form unwind-protect-form) varlist)
+    (push-assignments! (protected-form-of form) varlist)
     form))
 
 ;;; Generic nested statement extraction
@@ -118,72 +151,93 @@
         (nested-assns nil)
         (*nested-trigger-set* nil))
     (labels ((extract-stmt (form)
-               (let ((binding
-                      (with-form-object (binding 'lexical-variable-binding-form nil
-                                                 :name (make-symbol "_T")
-                                                 :initial-value nil)
-                        (setf (form-c-type-of binding) (form-c-type-of form))
-                        (push binding nested-vars))))
-                 (aprog1
-                     (make-lexical-var binding (parent-of form))
-                   (push (push-assignments form (list it)) nested-assns))))
+               (let* ((binding (make-lexical-binding nil :c-type form))
+                      (var (make-lexical-var binding (parent-of form))))
+                 (push binding nested-vars)
+                 (push (push-assignments form (list var)) nested-assns)
+                 var))
+             ;; Main recursive handler
              (unnest-rec (parent field form)
                (declare (ignore parent field))
                (if (typep form 'walked-form)
                    (let ((stmt? (is-statement? form)))
+                     ;; Deferred statement forms may be rendered
+                     ;; both as expressions and statements. This
+                     ;; code ensures that they are promoted to
+                     ;; full statements if they contain any non-
+                     ;; deferred ones.
                      (when (eq stmt? :defer)
                        (let ((*nested-trigger-set* t))
                          (catch 'statement-found
                            (recurse form)
+                           ;; Executed only if no statements inside.
                            (setf (is-expression? form) t)
                            (return-from unnest-rec form))))
+                     ;; Deferred handling failed, or impossible.
                      (if stmt?
                          (if *nested-trigger-set*
+                             ;; Within deferred: promote. May cascade.
                              (throw 'statement-found t)
                              (extract-stmt form))
                          (progn
                            (recurse form)
                            form)))
                    form))
+             ;; Recursion thunk
              (recurse (form)
                (rewrite-ast-fields form #'unnest-rec)))
+      ;; Perform the recursion.
       (if pull-root?
-          (setf start-with (unnest-rec form nil start-with))
+          (setf start-with
+                (if (listp start-with)
+                    (mapcar (lambda (item) (unnest-rec form nil item)) start-with)
+                    (unnest-rec form nil start-with)))
           (recurse start-with))
+      ;; If any statements found, wrap in a let form.
       (values (if (or nested-vars nested-assns)
-                  (with-form-object (wrapper (if nested-vars 'let-form 'progn-form)
-                                             (parent-of form)
-                                             :body (nreverse (list* form
-                                                                    (mapcar #'flatten-statements
-                                                                            nested-assns))))
-                    (adjust-parents (body-of wrapper))
-                    (when nested-vars
-                      (setf (bindings-of wrapper) (nreverse nested-vars))
-                      (adjust-parents (bindings-of wrapper))))
+                  (let ((new-body ; recurse into extracted statements:
+                         (list* form (mapcar #'flatten-statements nested-assns))))
+                    (with-form-object (wrapper (if nested-vars 'let-form 'progn-form)
+                                               (parent-of form) :body (nreverse new-body))
+                      (adjust-parents (body-of wrapper))
+                      (when nested-vars
+                        (setf (bindings-of wrapper) (nreverse nested-vars))
+                        (adjust-parents (bindings-of wrapper)))))
                   form)
               start-with))))
 
 ;;; Specialization for various statements
 
+(define-modify-macro flatten-statements! () flatten-statements)
+
 (def layered-methods flatten-statements
+  ;; Generic: assume it's an expression
   (:method ((form walked-form))
     (extract-nested-statements form))
 
+  (:method ((form cons))
+    (mapcar #'flatten-statements form))
+
+  ;; Block-like
   (:method ((form implicit-progn-mixin))
-    (setf (body-of form)
-          (mapcar #'flatten-statements (body-of form)))
+    (flatten-statements! (body-of form))
     form)
 
+  ;; Variable bindings: may split
   (:method ((form lexical-variable-binder-form))
-    (flet ((split (tail init-stmt)
+    (flet (;; Splits the binding statement after the point
+           (split (tail init-stmt)
+             ;; The initform is being converted to a side effect
              (setf (initial-value-of (car tail)) nil)
+             ;; If there are some more bindings, split
              (when (cdr tail)
-               (with-form-object (inner 'let-form form
+               (with-form-object (inner (class-of form) form
                                         :bindings (cdr tail)
                                         :body (body-of form))
-                 (setf (cdr tail) nil) ; split the bindings
+                 (setf (cdr tail) nil) ; cut the binding list
                  (adjust-parents (bindings-of inner))
                  (adjust-parents (body-of inner))
+                 ;; Split declarations
                  (loop for decl in (declarations-of form)
                     :if (and (typep decl 'named-walked-form)
                              (find-form-by-name (name-of decl)
@@ -194,12 +248,16 @@
                       (setf (declarations-of form) cur-decls
                             (declarations-of inner) inner-decls))
                  (adjust-parents (declarations-of inner))
+                 ;; Replace the outer body
                  (setf (body-of form) (list inner))))
+             ;; Push the side effect statement and walk the body.
              (push init-stmt (body-of form))
              (return-from flatten-statements
                (call-next-method)))
+           ;; Assignment push helper
            (push-assn (form binding)
              (push-assignments form (list (make-lexical-var binding nil)))))
+      ;; Walk bindings, looking for split points
       (loop for tail on (bindings-of form)
          :for binding = (car tail)
          :for value = (initial-value-of binding)
@@ -209,15 +267,20 @@
                  (let ((ext (extract-nested-statements value)))
                    (unless (eq ext value)
                      (split tail (push-assn ext binding))))))
+      ;; Walk the body
       (call-next-method)))
 
+  ;; Assignments
   (:method ((form setq-form))
     (let* ((value (value-of form))
            (stmt? (is-statement? value)))
-      (cond ((and stmt? (typep value 'application-form))
+      (cond ((and stmt? (or (typep value 'free-application-form)
+                            (typep value 'verbatim-code-form)))
+             ;; Some forms return values, but do it explicitly in
+             ;; their code generators:
              (setf (is-merged-assignment? form) t)
              (extract-nested-statements form :start-with value))
-            (stmt?
+            (stmt? ; Statement as value
              (let ((alt (push-assignments value (list (variable-of form)))))
                (assert (is-statement? alt))
                (flatten-statements alt)))
@@ -227,7 +290,8 @@
   (:method ((form multiple-value-setq-form))
     (let* ((value (value-of form))
            (stmt? (is-statement? value)))
-      (cond ((and stmt? (typep value 'application-form))
+      (cond ((and stmt? (or (typep value 'free-application-form)
+                            (typep value 'verbatim-code-form)))
              (setf (is-merged-assignment? form) t)
              (extract-nested-statements form :start-with value))
             (stmt?
@@ -238,6 +302,7 @@
              (error "Could not inline multiple-value assignment: ~S"
                     (unwalk-form form))))))
 
+  ;; Miscellaneous statements
   (:method ((form values-form))
     ;; Demote to progn
     (flatten-statements
@@ -253,15 +318,39 @@
                                              form))
           (setf (result-of form) nil)
           (adjust-parents (body-of progn))
-          (setf (first (body-of progn))
-                (flatten-statements (first (body-of progn)))))))
+          (flatten-statements! (first (body-of progn))))))
 
   (:method ((form if-form))
-    (setf (then-of form) (flatten-statements (then-of form)))
-    (setf (else-of form) (flatten-statements (else-of form)))
+    (flatten-statements! (then-of form))
+    (flatten-statements! (else-of form))
     (multiple-value-bind (new-form new-condition)
-        (extract-nested-statements form :start-with (condition-of form)
-                                   :pull-root? t)
+        (extract-nested-statements form :start-with (condition-of form) :pull-root? t)
       (setf (condition-of form) new-condition)
       new-form))
-  )
+
+  (:method ((form multiple-value-prog1-form))
+    (flatten-statements! (first-form-of form))
+    (flatten-statements! (other-forms-of form))
+    form)
+
+  (:method ((form unwind-protect-form))
+    (flatten-statements! (protected-form-of form))
+    (flatten-statements! (cleanup-form-of form))
+    form)
+
+  ;; Verbatim code
+  (:method ((form verbatim-code-form))
+    (let ((exprs nil))
+      (do-verbatim-code (item flags form)
+        (if (getf flags :stmt)
+            (flatten-statements! item)
+            (push item exprs)))
+      (multiple-value-bind (new-form new-exprs)
+          (extract-nested-statements form :start-with exprs :pull-root? t)
+        (unless (eq new-form form)
+          (let ((table (loop for a in exprs and b in new-exprs
+                          unless (eq a b) collect (cons a b))))
+            (setf (body-of form)
+                  (mapcar (lambda (item) (aif (assoc item table) (cdr it) item))
+                          (body-of form)))))
+        new-form))))
