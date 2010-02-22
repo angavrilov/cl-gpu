@@ -3,6 +3,9 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file defines the core C code generation functionality.
+;;;
 
 (in-package :cl-gpu)
 
@@ -277,13 +280,28 @@
                                                (t `(recurse ,arg))))
                                            args)))))))
 
+(def function emit-verbatim-item (item stream)
+  (typecase item
+    (string    (princ item stream))
+    (character (if (eql item #\Newline)
+                   (emit-code-newline stream)
+                   (princ item stream)))
+    (t         (emit-c-code item stream))))
+
 (def function emit-assignment-code (stream variable target)
   (let ((gpu-var (ensure-gpu-var variable)))
     (princ (generate-var-ref gpu-var) stream))
   (princ " = " stream)
-  (if (stringp target)
-      (princ target stream)
-      (emit-c-code target stream)))
+  (emit-verbatim-item target stream))
+
+(def function emit-merged-assignment (stream form index node)
+  (let ((parent (parent-of form)))
+    (check-type parent (or multiple-value-setq-form setq-form))
+    (emit-c-code parent stream :merged-index index :merged-node node)))
+
+(def macro newline-unless-first! (first stream)
+  `(if ,first (setf ,first nil)
+       (emit-code-newline ,stream)))
 
 (def layered-methods emit-c-code
   ;; Delegate function calls
@@ -293,7 +311,12 @@
   (:method ((form setf-application-form) stream &key)
     (emit-assn-c-code (operator-of form) form stream))
 
-  ;; Constants
+  ;; Nice error message
+  (:method ((form walked-form) stream &key)
+    (declare (ignore stream))
+    (error "This form is not supported in GPU code: ~S" (unwalk-form form)))
+
+  ;; Verbatim helpers
   (:method ((form number) stream &key)
     (format stream "~A" form))
 
@@ -306,6 +329,7 @@
   (:method ((form double-float) stream &key)
     (format stream "~,,,,,,'EE" form))
 
+  ;; Constants
   (:method ((form constant-form) stream &key)
     (let ((value (value-of form))
           (type (form-c-type-of form)))
@@ -335,6 +359,7 @@
           (t
            (emit-assignment-code stream (variable-of form) (value-of form)))))
 
+  ;; Variable
   (:method ((form walked-lexical-variable-reference-form) stream &key)
     (let ((gpu-var (ensure-gpu-var form)))
       (princ (generate-var-ref gpu-var) stream)))
@@ -352,22 +377,13 @@
 
   ;; Verbatim inline code
   (:method ((form verbatim-code-form) stream &key)
-    (let ((flags nil))
-      (flet ((recurse (obj)
-               (emit-c-code obj stream)
-               (setf flags nil)))
-        (dolist (item (body-of form))
-          (typecase item
-            (constant-form
-             (atypecase (value-of item)
-               (string  (princ it stream))
-               (character
-                (if (eql it #\Newline)
-                    (emit-code-newline stream)
-                    (princ it stream)))
-               (keyword (push it flags))
-               (t (recurse item))))
-            (t (recurse item)))))))
+    (do-verbatim-code (item flags form :flatten? t)
+      (aif (getf flags :return-nth)
+           (when (and (not (and (has-merged-assignment? form)
+                                (emit-merged-assignment stream form it item)))
+                      (getf flags :force-return))
+             (emit-verbatim-item item stream))
+           (emit-verbatim-item item stream))))
 
   ;; Local variables
   (:method ((form lexical-variable-binding-form) stream &key)
@@ -385,26 +401,25 @@
 
   ;; Program block
   (:method :around ((form implicit-progn-mixin) stream &key inside-block?)
-    (cond ((is-expression? form)
+    (cond ((is-expression? form) ; use the comma operator
            (princ "(" stream)
            (with-indented-c-code
              (emit-code-newline stream)
              (call-next-method)
              (emit-code-newline stream))
            (princ ")" stream))
-          (inside-block?
+          (inside-block?         ; merge with the upper block
            (call-next-method))
-          (t
-           (progn
-             (princ "{" stream)
-             (with-indented-c-code
-               (emit-code-newline stream)
-               (call-next-method))
+          (t                     ; print a new block
+           (princ "{" stream)
+           (with-indented-c-code
              (emit-code-newline stream)
-             (princ "}" stream)))))
+             (call-next-method))
+           (emit-code-newline stream)
+           (princ "}" stream))))
 
   (:method ((form implicit-progn-mixin) stream &key)
-    (if (is-expression? form)
+    (if (is-expression? form)    ; use the comma operator
         (loop
            for item in (body-of form)
            for first = t then nil
@@ -414,15 +429,18 @@
                (emit-code-newline stream))
            :do (emit-c-code item stream))
         (loop
+           with first = t
            for item in (body-of form)
-           for first = t then nil
            do
-           (when (or first (not (nop-form? item)))
-             (unless first
-               (emit-code-newline stream))
-             (emit-c-code item stream :inside-block? t)
-             (princ ";" stream)))))
+             (when (not (nop-form? item))
+               (newline-unless-first! first stream)
+               (emit-c-code item stream :inside-block? t)
+               (princ ";" stream))
+           finally
+             (when first
+               (princ ";" stream)))))
 
+  ;; LET/LET*
   (:method :around ((form lexical-variable-binder-form) stream &key)
     (call-next-layered-method form stream :inside-block? nil))
 
@@ -437,27 +455,29 @@
     ;; Assign label identifiers
     (dolist (item (body-of form))
       (when (and (typep item 'go-tag-form)
-                 (null (c-name-of item)))
+                 (null (c-name-of item))
+                 (usages-of item)) ; don't bother if unused
         (setf (c-name-of item) (make-local-c-name (name-of item)))))
     ;; Output C code
     (loop
+       with first = t
        for tail on (body-of form)
-       for first = t then nil
        do (atypecase (car tail)
             (go-tag-form
-             (let ((*c-code-indent* (- *c-code-indent* *c-code-indent-step*)))
-               (unless first
-                 (emit-code-newline stream))
-               (format stream "~A:" (c-name-of it)))
-             ;; Insert a semicolon if ends with a label
-             (unless (cdr tail)
-               (emit-code-newline stream)
-               (format stream "; /*end*/")))
+             (when (c-name-of it)
+               (let ((*c-code-indent* (- *c-code-indent* *c-code-indent-step*)))
+                 (newline-unless-first! first stream)
+                 (format stream "~A:;" (c-name-of it))
+                 (unless (cdr tail)
+                   (format stream " /*end*/")))))
             (t
-             (unless first
-               (emit-code-newline stream))
-             (emit-c-code it stream :inside-block? t)
-             (princ ";" stream)))))
+             (unless (nop-form? it)
+               (newline-unless-first! first stream)
+               (emit-c-code it stream :inside-block? t)
+               (princ ";" stream))))
+       finally
+         (when first
+           (princ ";" stream))))
 
   (:method ((form go-tag-form) stream &key)
     (declare (ignore form stream))
@@ -472,12 +492,14 @@
   ;; Block & return
   (:method ((form block-form) stream &key)
     ;; Assign the label
-    (when (null (c-name-of form))
+    (when (and (null (c-name-of form))
+               (usages-of form)) ; don't bother if unused
       (setf (c-name-of form) (make-local-c-name (name-of form))))
     ;; Output C code
     (call-next-method)
-    (emit-code-newline stream)
-    (format stream "~A: ; /*end block*/" (c-name-of form)))
+    (when (c-name-of form)
+      (emit-code-newline stream)
+      (format stream "~A: ; /*end block*/" (c-name-of form))))
 
   (:method ((form return-from-form) stream &key)
     (unless (c-name-of (target-block-of form))
@@ -487,7 +509,7 @@
 
   ;; If
   (:method ((form if-form) stream &key)
-    (cond ((is-expression? form)
+    (cond ((is-expression? form) ; use the ternary operator
            (princ "(" stream)
            (emit-c-code (condition-of form) stream)
            (princ "?" stream)
@@ -495,7 +517,7 @@
            (princ ":" stream)
            (emit-c-code (else-of form) stream)
            (princ ")" stream))
-          (t
+          (t                     ; use the if statement
            (princ "if (" stream)
            (emit-c-code (condition-of form) stream)
            (princ ") {" stream)
@@ -513,16 +535,9 @@
                (princ ";" stream))
              (emit-code-newline stream)
              (princ "}" stream)))))
-
-  
   )
 
 ;;; Utilities
-
-(def function emit-merged-assignment (stream form index node)
-  (let ((parent (parent-of form)))
-    (check-type parent (or multiple-value-setq-form setq-form))
-    (emit-c-code parent stream :merged-index index :merged-node node)))
 
 (def function emit-separated (stream args op &key single-pfix)
   (assert args)

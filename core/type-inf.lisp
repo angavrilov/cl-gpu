@@ -3,6 +3,9 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file defines the core C type inference engine.
+;;;
 
 (in-package :cl-gpu)
 
@@ -280,6 +283,7 @@
     (error "Unsupported l-value function: ~A in ~S" name (unwalk-form form))))
 
 (def layered-methods propagate-c-types
+  ;; Generic
   (:method :around (form &key upper-type)
     (declare (ignore upper-type))
     (let ((rtype (call-next-method)))
@@ -287,6 +291,11 @@
         (error "Cannot determine type of: ~S" (unwalk-form form)))
       (setf (form-c-type-of form) rtype)))
 
+  (:method ((form walked-form) &key upper-type)
+    (declare (ignore upper-type))
+    (error "This form is not supported in GPU code: ~S" (unwalk-form form)))
+
+  ;; Type cast
   (:method ((form the-form) &key upper-type)
     (declare (ignore upper-type))
     (let* ((cast-type (parse-local-type (declared-type-of form)))
@@ -298,10 +307,12 @@
         (change-class form 'cast-form))
       cast-type))
 
+  ;; Variable reference
   (:method ((form walked-lexical-variable-reference-form) &key upper-type)
     (declare (ignore upper-type))
     (gpu-var-ref-type form))
 
+  ;; Constants
   (:method ((form constant-form) &key upper-type)
     (if (typep (value-of form) 'character)
         (setf (value-of form) (char-code (value-of form))
@@ -331,6 +342,7 @@
              (t :boolean)))
       (t (error "Cannot use constant ~S in C code." it))))
 
+  ;; Assignment
   (:method ((form setq-form) &key upper-type)
     (let* ((target-type (gpu-var-ref-type (variable-of form)))
            (val-type (propagate-c-types (value-of form)
@@ -341,6 +353,7 @@
                    :prefix "assignment to ")
       (if (eq upper-type :void) :void target-type)))
 
+  ;; Value group
   (:method ((form values-form) &key upper-type)
     (let ((args (values-of form)))
       (cond ((and (consp upper-type)
@@ -360,17 +373,20 @@
           :void
           (list* :values (mapcar #'form-c-type-of args)))))
 
+  ;; Verbatim code
   (:method ((form verbatim-code-form) &key upper-type)
     (declare (ignore upper-type))
-    (dolist (item (body-of form))
+    (do-verbatim-code (item flags form :flatten? t)
       (typecase item
-        (constant-form
-         (typecase (value-of item)
-           ((or string character keyword))
-           (t (propagate-c-types item))))
-        (t (propagate-c-types item))))
+        ((or string character))
+        (t
+         (let* ((upper (getf flags :type))
+                (rtype (propagate-c-types item :upper-type upper)))
+           (when upper
+             (verify-cast rtype upper form :prefix "inline argument "))))))
     (form-c-type-of form))
 
+  ;; Blocks
   (:method ((form implicit-progn-mixin) &key upper-type)
     (if (null (body-of form))
         :void
@@ -462,6 +478,18 @@
     (dolist (binding (bindings-of form))
       (propagate-c-types binding))
     (call-next-method))
+
+  (:method ((form multiple-value-prog1-form) &key upper-type)
+    (aprog1
+        (propagate-c-types (first-form-of form) :upper-type upper-type)
+      (dolist (item (other-forms-of form))
+        (propagate-c-types item :upper-type :void))))
+
+  (:method ((form unwind-protect-form) &key upper-type)
+    (aprog1
+        (propagate-c-types (protected-form-of form) :upper-type upper-type)
+      (dolist (item (cleanup-form-of form))
+        (propagate-c-types item :upper-type :void))))
 
   ;; Delegate calls and assignments
   (:method ((form free-application-form) &key upper-type)

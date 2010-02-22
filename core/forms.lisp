@@ -130,37 +130,6 @@
   `(inline-verbatim (,form-c-type :statement? ,(not is-expression?))
      ,@(recurse-on-body body)))
 
-(def function parse-verbatim-flag (list-pos flags)
-  (ecase (value-of (car list-pos))
-    (:stmt (setf (getf flags :stmt) t))
-    (:return?
-     (setf (getf flags :return-nth) 0))
-    (:return
-     (setf (getf flags :return-nth) 0
-           (getf flags :force-return) t))
-    (:return-nth?
-     (setf (getf flags :return-nth) (cadr list-pos)
-           list-pos (cdr list-pos)))
-    (:return-nth
-     (setf (getf flags :return-nth) (cadr list-pos)
-           list-pos (cdr list-pos)
-           (getf flags :force-return) t)))
-  (values list-pos flags))
-
-(def macro do-verbatim-code ((item flags form) &body code)
-  (with-unique-names (list-pos)
-    `(let ((,flags nil))
-       (do ((,list-pos (body-of ,form) (cdr ,list-pos)))
-           ((null ,list-pos))
-         (symbol-macrolet ((,item (car ,list-pos)))
-           (if (and (typep ,item 'constant-form)
-                    (keywordp (value-of ,item)))
-               (setf (values ,list-pos ,flags)
-                     (parse-verbatim-flag ,list-pos ,flags))
-               (progn
-                 ,@code
-                 (setf ,flags nil))))))))
-
 ;;; AND & OR - parse them as ordinary function calls
 
 (def (walker :in gpu-target) or
@@ -272,6 +241,45 @@
 (def function unknown-type? (type)
   (case type
     ((nil t number real) t)))
+
+(def function parse-verbatim-flag (list-pos flags)
+  (ecase (value-of (car list-pos))
+    (:stmt (setf (getf flags :stmt) t))
+    (:return
+     (setf (getf flags :return-nth) 0))
+    (:return!
+     (setf (getf flags :return-nth) 0
+           (getf flags :force-return) t))
+    (:return-nth
+     (setf (getf flags :return-nth) (ensure-int-constant (cadr list-pos))
+           list-pos (cdr list-pos)))
+    (:return-nth!
+     (setf (getf flags :return-nth) (ensure-int-constant (cadr list-pos))
+           list-pos (cdr list-pos)
+           (getf flags :force-return) t))
+    (:type
+     (setf (getf flags :type) (ensure-constant (cadr list-pos))
+           list-pos (cdr list-pos))))
+  (values list-pos flags))
+
+(def macro do-verbatim-code ((item flags form &key flatten?) &body code)
+  (with-unique-names (list-pos skip-tag)
+    `(let ((,flags nil))
+       (do ((,list-pos (body-of ,form) (cdr ,list-pos)))
+           ((null ,list-pos))
+         (,(if flatten? 'let 'symbol-macrolet) ((,item (car ,list-pos)))
+           (when (typep ,item 'constant-form)
+             (atypecase (value-of ,item)
+               (keyword
+                (setf (values ,list-pos ,flags)
+                      (parse-verbatim-flag ,list-pos ,flags))
+                (go ,skip-tag))
+               ,@(if flatten?
+                     `(((or string character)
+                        (setf ,item it))))))
+           ,@code)
+         (setf ,flags nil)
+         ,skip-tag))))
 
 (def function pull-global-refs (tree)
   "Convert all special refs to &aux arguments."

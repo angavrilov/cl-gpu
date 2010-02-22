@@ -329,9 +329,12 @@
       new-form))
 
   (:method ((form multiple-value-prog1-form))
-    (flatten-statements! (first-form-of form))
-    (flatten-statements! (other-forms-of form))
-    form)
+    ;; Demote to progn
+    (flatten-statements
+     (with-form-object (progn 'progn-form (parent-of form)
+                              :body (list* (first-form-of form)
+                                           (other-forms-of form)))
+       (adjust-parents (body-of progn)))))
 
   (:method ((form unwind-protect-form))
     (flatten-statements! (protected-form-of form))
