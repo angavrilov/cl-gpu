@@ -29,7 +29,7 @@
                                         builtin-args
                                         method-name-selector
                                         body-forms
-                                        &key method-args top-decls prefix)
+                                        &key method-args top-decls let-decls prefix)
   "Non-hygienic helper for stuff like c-code-emitter.
 Defines variables: assn? rq-args opt-args rest-arg aux-args."
   `(let ((assn? nil))
@@ -48,6 +48,7 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
           (let* ((-arguments- (arguments-of -form-))
                  ,@(if assn?
                        `((-value- (value-of -form-)))))
+            ,@(aif ,let-decls `((declare ,@it)))
             (,@,(or prefix ''(progn))
               (destructuring-bind ,,builtin-args
                   -arguments-

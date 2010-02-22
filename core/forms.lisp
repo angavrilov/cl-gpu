@@ -28,6 +28,10 @@
 (def form-attribute-accessor is-merged-assignment?
   :forms setq-form)
 
+(defstruct side-effects reads writes)
+
+(def form-attribute-accessor side-effects :type side-effects)
+
 ;; A wrapper for global variables
 
 (def (form-class :export nil) global-var-binding-form (name-definition-form)

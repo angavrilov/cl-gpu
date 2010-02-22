@@ -48,6 +48,9 @@
                      :allow '(:int32) :error-on-warn? t))
   (second arr/type))
 
+(def side-effects aref (arr &rest indexes)
+  (make-side-effects :reads (list (ensure-gpu-var arr))))
+
 (def type-arg-walker (setf aref) (arr &rest indexes)
   (let ((arr/type (recurse arr)))
     (verify-array-var arr)
@@ -64,6 +67,9 @@
                      :allow '(:int32) :error-on-warn? t))
   (verify-cast -value/type- (second arr/type) -form-)
   (if (eq -upper-type- :void) :void (second arr/type)))
+
+(def side-effects (setf aref) (arr &rest indexes)
+  (make-side-effects :writes (list (ensure-gpu-var arr))))
 
 (def function emit-aref-core (var indexes stream)
   (let* ((gpu-var (ensure-gpu-var var))
@@ -93,6 +99,9 @@
                :allow '(:int32) :error-on-warn? t)
   (second arr/type))
 
+(def side-effects raw-aref (arr index)
+  (make-side-effects :reads (list (ensure-gpu-var arr))))
+
 (def type-arg-walker (setf raw-aref) (arr index)
   (let ((arr/type (recurse arr)))
     (verify-array-var arr)
@@ -104,6 +113,9 @@
                :allow '(:int32) :error-on-warn? t)
   (verify-cast -value/type- (second arr/type) -form-)
   (if (eq -upper-type- :void) :void (second arr/type)))
+
+(def side-effects (setf raw-aref) (arr index)
+  (make-side-effects :writes (list (ensure-gpu-var arr))))
 
 (def c-code-emitter raw-aref (var index)
   (let ((gpu-var (ensure-gpu-var var)))

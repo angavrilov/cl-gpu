@@ -353,6 +353,7 @@
   (unless (and (slot-boundp function 'body)
                (body-of function))
     (propagate-c-types (form-of function) :upper-type :void)
+    (compute-side-effects (form-of function))
     (flatten-statements (form-of function))
     (setf (body-of function)
           (with-output-to-string (stream)
