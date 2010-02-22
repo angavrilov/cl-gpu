@@ -495,20 +495,18 @@
    ;; Builtin prototype + method name
    name args (if assn? 'compute-assn-type 'compute-call-type)
    ;; Body
-   (let* ((rq-targs (mapcar #'make-type-arg rq-args))
-          (opt-targs (mapcar (lambda (x) (make-type-arg (first x))) opt-args))
-          (rest-targ (if rest-arg (make-type-arg rest-arg)))
-          (all-args (flatten (list rq-args (mapcar #'first opt-args) rest-arg)))
-          (all-targs (flatten (list rq-targs opt-targs rest-targ))))
-     `((declare (ignorable ,@all-args))
-       (let* ((-arguments-/type (mapcar #'form-c-type-of -arguments-))
-              ,@(if assn?
-                    `((-value-/type (form-c-type-of -value-)))))
-         (destructuring-bind (,@rq-targs ,@(if opt-args `(&optional ,@opt-targs))
-                                         ,@(if rest-arg `(&rest ,rest-targ)))
-             -arguments-/type
-           (declare (ignorable ,@all-targs))
-           ,@code))))
+   (let* ((all-fix-args (append rq-args (mapcar #'first opt-args))))
+     `((declare (ignorable ,@all-fix-args ,@(ensure-list rest-arg)))
+       (symbol-macrolet ((-arguments/type- (mapcar #'form-c-type-of -arguments-))
+                         ,@(if assn?
+                               `((-value/type- (form-c-type-of -value-))))
+                         ,@(mapcar (lambda (arg)
+                                     `(,(make-type-arg arg) (form-c-type-of ,arg)))
+                                   all-fix-args)
+                         ,@(if rest-arg
+                               `((,(make-type-arg rest-arg)
+                                   (mapcar #'form-c-type-of ,rest-arg)))))
+         ,@code)))
    :method-args `(&key ((:upper-type -upper-type-)))
    :top-decls `((ignorable -upper-type-))))
 

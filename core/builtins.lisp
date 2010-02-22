@@ -62,7 +62,7 @@
   (loop for idx in indexes
      do (verify-cast idx :uint32 -form- :prefix "index "
                      :allow '(:int32) :error-on-warn? t))
-  (verify-cast -value-/type (second arr/type) -form-)
+  (verify-cast -value/type- (second arr/type) -form-)
   (if (eq -upper-type- :void) :void (second arr/type)))
 
 (def function emit-aref-core (var indexes stream)
@@ -102,7 +102,7 @@
 (def type-computer (setf raw-aref) (arr index)
   (verify-cast index :uint32 -form- :prefix "index "
                :allow '(:int32) :error-on-warn? t)
-  (verify-cast -value-/type (second arr/type) -form-)
+  (verify-cast -value/type- (second arr/type) -form-)
   (if (eq -upper-type- :void) :void (second arr/type)))
 
 (def c-code-emitter raw-aref (var index)
