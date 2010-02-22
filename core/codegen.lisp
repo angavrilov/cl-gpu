@@ -349,7 +349,7 @@
          (format stream "((~A)~A)" (c-type-string type) value)))))
 
   ;; Assignment
-  (:method ((form setq-form) stream &key merged-index merged-node)
+  (:method ((form setq-form) stream &key merged-index merged-node inside-block?)
     (cond (merged-index
            (assert (is-merged-assignment? form))
            (awhen (= merged-index 0)
@@ -357,7 +357,11 @@
           ((is-merged-assignment? form)
            (emit-c-code (value-of form) stream))
           (t
-           (emit-assignment-code stream (variable-of form) (value-of form)))))
+           (unless inside-block?
+             (princ "(" stream))
+           (emit-assignment-code stream (variable-of form) (value-of form))
+           (unless inside-block?
+             (princ ")" stream)))))
 
   ;; Variable
   (:method ((form walked-lexical-variable-reference-form) stream &key)
