@@ -185,7 +185,7 @@
                    form))
              ;; Recursion thunk
              (recurse (form)
-               (rewrite-ast-fields form #'unnest-rec)))
+               (rewrite-ast-links form #'unnest-rec)))
       ;; Perform the recursion.
       (if pull-root?
           (setf start-with

@@ -39,6 +39,8 @@
             :writes (union (side-effects-writes arg1)
                            (side-effects-writes arg2))))))
 
+(define-modify-macro join-side-effects! (effects2) join-side-effects)
+
 (def function side-effect-conflicts (arg1 arg2)
   "Returns read-after-write and write-after-read conflicts."
   (when (and arg1 arg2)
@@ -78,14 +80,8 @@
 
   (:method ((form walked-form))
     (let ((result nil))
-      (map-ast (lambda (form2)
-                 (cond ((eq form2 form) form2)
-                       ((typep form2 'walked-form)
-                        (setf result
-                              (join-side-effects result (compute-side-effects form2)))
-                        nil)
-                       (t form2)))
-               form)
+      (do-ast-links (form2 form)
+        (join-side-effects! result (compute-side-effects form2)))
       result))
 
   ;; Variables

@@ -34,7 +34,7 @@
 
 ;; A wrapper for global variables
 
-(def (form-class :export nil) global-var-binding-form (name-definition-form)
+(def form-class global-var-binding-form (name-definition-form)
   ((gpu-variable :type (or gpu-variable null))
    (assigned-to? nil :type boolean)))
 
@@ -43,7 +43,7 @@
 (def (macro e) cast (type body)
   `(the ,type ,body))
 
-(def (form-class :export nil) cast-form (the-form)
+(def form-class cast-form (the-form)
   ())
 
 (def (walker :in gpu-target) cast
@@ -55,7 +55,7 @@
 
 ;; Values
 
-(def (form-class :export nil) values-form ()
+(def form-class values-form ()
   ((values :ast-link t)))
 
 (def (walker :in gpu-target) values
@@ -68,7 +68,7 @@
 
 ;; Multiple value setq
 
-(def (form-class :export nil) multiple-value-setq-form ()
+(def form-class multiple-value-setq-form ()
   ((variables :ast-link t)
    (value :ast-link t)
    (is-merged-assignment? nil)))
@@ -84,7 +84,7 @@
 
 ;; A SETF form.
 
-(def (form-class :export nil) setf-application-form (application-form)
+(def form-class setf-application-form (application-form)
   ((value :ast-link t)))
 
 (def (walker :in gpu-target) setf
@@ -122,7 +122,7 @@
   (declare (ignore ret-type code))
   (error "This form cannot be used in ordinary lisp code: ~S" full))
 
-(def (form-class :export nil) verbatim-code-form ()
+(def form-class verbatim-code-form ()
   ((body)
    (form-c-type)
    (is-expression?)))
