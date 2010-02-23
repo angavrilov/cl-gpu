@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file defines miscellaneous utility functions;
+;;; some of them depend on the lisp implementation.
+;;;
 
 (in-package :cl-gpu)
 

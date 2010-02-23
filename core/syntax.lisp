@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file implements reconstruction of GPU module
+;;; definition objects from a compact specification.
+;;;
 
 (in-package :cl-gpu)
 

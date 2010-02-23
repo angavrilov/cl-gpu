@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file defines a few convenient lisp types
+;;; and implements foreign<->lisp type conversion.
+;;;
 
 (in-package :cl-gpu)
 

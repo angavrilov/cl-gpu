@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file implements type checking and code generation
+;;; for standard library functions and special built-ins.
+;;;
 
 (in-package :cl-gpu)
 

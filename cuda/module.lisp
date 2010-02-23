@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file implements wrappers for CUDA module
+;;; variables and kernel functions.
+;;;
 
 (in-package :cl-gpu)
 

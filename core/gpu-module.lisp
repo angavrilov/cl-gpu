@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file defines classes that describe GPU modules,
+;;; and implements generic loading functionality.
+;;;
 
 (in-package :cl-gpu)
 

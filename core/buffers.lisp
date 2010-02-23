@@ -3,6 +3,11 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file defines an interface for a generic buffer
+;;; object that resembles an ordinary Common Lisp array.
+;;; The interface is immediately implemented for arrays.
+;;;
 
 (in-package :cl-gpu)
 

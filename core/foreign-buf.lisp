@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file implements the generic buffer interface for
+;;; a buffer based on foreign memory allocated via CFFI.
+;;;
 
 (in-package :cl-gpu)
 

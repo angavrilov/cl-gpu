@@ -3,6 +3,9 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file implements access to the NVidia C compiler.
+;;;
 
 (in-package :cl-gpu)
 

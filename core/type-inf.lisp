@@ -4,7 +4,8 @@
 ;;;
 ;;; See LICENCE for details.
 ;;;
-;;; This file defines the core C type inference engine.
+;;; This file defines core C type management functions
+;;; and type inference rules for special forms.
 ;;;
 
 (in-package :cl-gpu)

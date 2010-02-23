@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file defines new special forms, form attributes
+;;; and utility functions used by the translator.
+;;;
 
 (in-package :cl-gpu)
 

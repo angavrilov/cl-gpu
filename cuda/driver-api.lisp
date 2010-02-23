@@ -3,6 +3,10 @@
 ;;; Copyright (c) 2010 by Alexander Gavrilov.
 ;;;
 ;;; See LICENCE for details.
+;;;
+;;; This file contains CFFI bindings for the CUDA
+;;; Driver API and some low-level utility wrappers.
+;;;
 
 (in-package :cl-gpu)
 
