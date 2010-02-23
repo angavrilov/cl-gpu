@@ -35,6 +35,7 @@
 (def (generic e) deref-buffer (buffer)
   (:documentation "Decrease the reference count on the buffer. Returns post-value of buffer-refcnt.")
   (:method ((buffer t)) t)
+  (:method :around ((buffer null)) nil)
   (:method :around ((buffer t))
     (let ((cnt (buffer-refcnt buffer)))
       (if (and (numberp cnt) (> cnt 0))
@@ -42,6 +43,21 @@
             (call-next-method)
             (if (> cnt 1) (1- cnt) nil))
           cnt))))
+
+(def (macro e) with-deref-buffer ((var buffer-expr) &body code)
+  (with-unique-names (tmp)
+    `(let (,tmp)
+       (unwind-protect
+            (let ((,var (setf ,tmp ,buffer-expr)))
+              ,@code)
+         (deref-buffer ,tmp)))))
+
+(def (macro e) with-deref-buffers (bindings &body code)
+  (if (null (cdr bindings))
+      `(with-deref-buffer ,(car bindings) ,@code)
+      `(with-deref-buffer ,(car bindings)
+         (with-deref-buffers ,(cdr bindings)
+           ,@code))))
 
 (def (generic e) buffer-displace (buffer &key
                                          offset byte-offset ; Offset in elements of the original

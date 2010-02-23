@@ -128,16 +128,15 @@
 (defvar *foreign-arr4*)
 
 (def fixture foreign-arrs
-  (setf *foreign-arr1* (make-foreign-array '(5 5) :element-type 'single-float :initial-element 0.0))
-  (setf *foreign-arr2* (make-foreign-array '(5 5) :element-type 'single-float :initial-element 0.0))
-  (setf *foreign-arr3* (make-foreign-array 25 :element-type 'single-float :initial-element 0.0))
-  (setf *foreign-arr4* (make-foreign-array 25 :element-type 'single-float :initial-element 0.0))
-  (unwind-protect
-       (-body-)
-    (deref-buffer *foreign-arr1*)
-    (deref-buffer *foreign-arr2*)
-    (deref-buffer *foreign-arr3*)
-    (deref-buffer *foreign-arr4*)))
+  (with-deref-buffers ((*foreign-arr1*
+                        (make-foreign-array '(5 5) :element-type 'single-float :initial-element 0.0))
+                       (*foreign-arr2*
+                        (make-foreign-array '(5 5) :element-type 'single-float :initial-element 0.0))
+                       (*foreign-arr3*
+                        (make-foreign-array 25 :element-type 'single-float :initial-element 0.0))
+                       (*foreign-arr4*
+                        (make-foreign-array 25 :element-type 'single-float :initial-element 0.0)))
+    (-body-)))
 
 (def test test/buffers/foreign ()
   (with-fixture foreign-arrs
