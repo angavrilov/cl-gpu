@@ -112,7 +112,7 @@
     (remove-side-effects (call-next-method) (bindings-of form)))
 
   (:method ((form lambda-function-form))
-    (remove-side-effects (call-next-method) (arguments-of form)))
+    (remove-side-effects (call-next-method) (bindings-of form)))
 
   ;; Calls may have their own effects
   (:method ((form free-application-form))

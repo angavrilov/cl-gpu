@@ -3,6 +3,9 @@
 #+sbcl (require 'asdf)
 #-sbcl (load (merge-pathnames #P"asdf.lisp" *load-truename*))
 
+;; Not having a useful stack trace is very annoying.
+#+ecl (declaim (optimize (debug 3)))
+
 (push (make-pathname :defaults *load-truename* :name nil :type nil)
       asdf:*central-registry*)
 

@@ -297,7 +297,7 @@
 
 (def function pull-global-refs (tree)
   "Convert all special refs to &aux arguments."
-  (with-accessors ((top-args arguments-of)
+  (with-accessors ((top-args bindings-of)
                    (top-decls declarations-of)) tree
     (let ((arg-cache nil))
       (flet ((close-special-var (form)

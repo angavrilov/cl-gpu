@@ -29,7 +29,9 @@
                                         :keyword keyword
                                         :default-value (if default-value
                                                            (unwalk-form default-value)))
-                   (setf (gpu-variable-of aform) it))))))
+                         (setf (gpu-variable-of aform) it))))))
+      (when (allow-other-keys? lambda-form)
+        (error "Allow other keys is not allowed for ~As." title))
       (mapcar (lambda (aform)
                 (etypecase aform
                   (required-function-argument-form
@@ -46,8 +48,6 @@
                    (extract-arg aform
                                 :keyword (effective-keyword-name-of aform)
                                 :default-value (default-value-of aform)))
-                  (allow-other-keys-function-argument-form
-                   (error "Allow other keys is not allowed for ~As." title))
                   (auxiliary-function-argument-form
                    (unless kernel?
                      (error "Auxillary arguments are not allowed for ~As." title))
@@ -55,7 +55,7 @@
                      (error "Auxillary arguments must have a default value: ~S"
                             (unwalk-form aform)))
                    (extract-arg aform :default-value (default-value-of aform)))))
-              (arguments-of lambda-form)))))
+              (bindings-of lambda-form)))))
 
 (def function parse-kernel (code &key env id-table globals)
   (let* ((form  (preprocess-tree
@@ -115,7 +115,7 @@
             ((:kernel))))
         ;; Collect and parse the kernels
         (let ((kernel-env (reduce (lambda (var env)
-                                    (augment-walk-environment
+                                    (walk-environment/augment
                                      env :variable (name-of var) (form-of var)))
                                   var-list
                                   :from-end t :initial-value base-env)))

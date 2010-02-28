@@ -323,11 +323,10 @@
   (:method ((form string) stream &key)
     (princ form stream))
 
-  (:method ((form single-float) stream &key)
-    (format stream "~,,,,,,'EEf" form))
-
-  (:method ((form double-float) stream &key)
-    (format stream "~,,,,,,'EE" form))
+  (:method ((form float) stream &key)
+    (if (typep form 'single-float)
+        (format stream "~,,,,,,'EEf" form)
+        (format stream "~,,,,,,'EE" form)))
 
   ;; Constants
   (:method ((form constant-form) stream &key)

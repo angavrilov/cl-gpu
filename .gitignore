@@ -1,3 +1,6 @@
 *.fas
 *.fasl
 *.lx64fsl
+asdf-deps/*.asd
+asdf-deps/asdf.lisp
+asdf-deps/*/*
