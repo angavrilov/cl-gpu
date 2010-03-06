@@ -144,6 +144,15 @@
   `(inline-verbatim (,form-c-type :statement? ,(not is-expression?))
      ,@(recurse-on-body body)))
 
+;; A let with an implicit block - used to expand function calls
+
+(def form-class block-let-form (let*-form block-form)
+  ())
+
+(def unwalker block-let-form ()
+  (let ((rv (call-next-method)))
+    `(block-let* ,(name-of -form-) ,@(cdr rv))))
+
 ;;; AND & OR - parse them as ordinary function calls
 
 (def (walker :in gpu-target) or
@@ -246,6 +255,21 @@
     (setf (form-c-type-of var)
           (form-c-type-of definition))))
 
+(def function wrap-body-in-form (parent body &key declarations)
+  (cond (declarations
+         (with-form-object (obj 'locally-form parent
+                                :declarations declarations :body body)
+           (adjust-parents (declarations-of obj))
+           (adjust-parents (body-of obj))))
+        ((cdr body)
+         (with-form-object (obj 'progn-form parent :body body)
+           (adjust-parents (body-of obj))))
+        ((car body)
+         (setf (parent-of (car body)) parent)
+         (car body))
+        (t
+         (with-form-object (obj 'constant-form parent :value nil)))))
+
 (def function nop-form? (obj)
   (or (null obj)
       (nil-constant? obj)
@@ -295,58 +319,6 @@
          (setf ,flags nil)
          ,skip-tag))))
 
-(def function pull-global-refs (tree)
-  "Convert all special refs to &aux arguments."
-  (with-accessors ((top-args bindings-of)
-                   (top-decls declarations-of)) tree
-    (let ((arg-cache nil))
-      (flet ((close-special-var (form)
-               (let ((arg-def
-                      (or (cdr (assoc (name-of form) arg-cache))
-                          ;; Add a new aux argument
-                          (let ((name (name-of form))
-                                (type (or (declared-type-of form) t)))
-                            ;; Use type declarations via (the ... *foo*)
-                            (when (and (unknown-type? type)
-                                       (typep (parent-of form) 'the-form))
-                              (setf type (declared-type-of (parent-of form))))
-                            ;; Assert that the type is known
-                            (when (unknown-type? type)
-                              (error "Unknown global variable type: ~S" name))
-                            ;; Create the argument
-                            (let* ((new-id (make-symbol (string name)))
-                                   (arg (with-form-object (arg 'auxiliary-function-argument-form tree
-                                                               :name new-id)
-                                          (setf (default-value-of arg)
-                                                (walk-form `(locally (declare (special ,name))
-                                                              ,name)
-                                                           :parent arg)))))
-                              (nconcf top-args (list arg))
-                              (push (cons name arg) arg-cache)
-                              (with-form-object (decl 'type-declaration-form tree
-                                                      :name new-id :declared-type type)
-                                (nconcf top-decls (list decl)))
-                              arg)))))
-                 (change-class form 'walked-lexical-variable-reference-form
-                               :name (name-of arg-def) :definition arg-def)
-                 nil)))
-        (map-ast (lambda (form)
-                   (if (member form top-args)
-                       nil ; Don't process top args to avoid cycles
-                       (typecase form
-                         (special-variable-reference-form
-                          (close-special-var form))
-                         (unwalked-lexical-variable-reference-form
-                          (error "Closing over lexical variables is not supported: ~S"
-                                 (unwalk-form form)))
-                         (lexical-variable-binding-form
-                          (when (special-binding? form)
-                            (error "Binding special variables is not supported: ~S"
-                                   (unwalk-form form)))
-                          form)
-                         (t form))))
-                 tree)))))
-
 (def function mark-mutated-vars (tree)
   (flet ((mark-var (variable form)
            (unless (typep variable 'walked-lexical-variable-reference-form)
@@ -363,12 +335,3 @@
                form)
              tree)))
 
-(def function preprocess-tree (tree global-vars)
-  ;; Mark bindings that are destructively assigned to.
-  ;; This also checks absence of assignments to special vars.
-  (mark-mutated-vars tree)
-  ;; Convert global var refs to &aux args.
-  (pull-global-refs tree)
-  ;; Collect the binding usage lists.
-  (annotate-binding-usage (list* tree (mapcar #'form-of global-vars)))
-  tree)
