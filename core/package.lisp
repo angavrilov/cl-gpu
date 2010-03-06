@@ -24,8 +24,10 @@
 
   (:import-from #:hu.dwim.walker
                 #:recurse #:recurse-on-body
-                #:variable #:value #:body
-                #:walk-environment/augment)
+                #:variable #:value #:body #:declarations
+                #:walk-environment/augment
+                #:-augment- #:with-current-form
+                #:unwalk-declarations)
 
   (:export #:cuda-driver-error #:buffer
            #:int8 #:int16 #:int32 #:int64

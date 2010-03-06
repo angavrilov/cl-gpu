@@ -86,6 +86,39 @@
 (def unwalker multiple-value-setq-form (variables value)
   `(multiple-value-setq ,(recurse-on-body variables) ,(recurse value)))
 
+;; Multiple value bind
+
+(def form-class multiple-value-bind-form (binder-form-mixin
+                                          implicit-progn-with-declarations-mixin)
+  ((value :ast-link t)))
+
+(def (walker :in gpu-target) multiple-value-bind
+  (with-form-object (bind 'multiple-value-bind-form -parent-)
+    (setf (bindings-of bind)
+          (mapcar (lambda (name)
+                    (with-current-form name
+                      (with-form-object (binding 'lexical-variable-binding-form bind
+                                                 :name name :initial-value nil))))
+                  (second -form-)))
+    (setf (value-of bind) (recurse (third -form-) bind))
+    (walk-implict-progn
+     bind (cdddr -form-) -environment-
+     :declarations-allowed t
+     :declarations-callback (lambda (declarations &aux var-names)
+                              (dolist (binding (bindings-of bind))
+                                (push (name-of binding) var-names)
+                                (if (find-form-by-name (name-of binding) declarations
+                                                       :type 'special-variable-declaration-form)
+                                    (setf (special-binding? binding) t)
+                                    (-augment- :variable (name-of binding) binding)))
+                              (values -environment- var-names)))))
+
+(def unwalker multiple-value-bind-form (value body declarations)
+  `(multiple-value-bind ,(mapcar #'name-of (bindings-of -form-))
+       ,(recurse value)
+     ,@(unwalk-declarations declarations)
+     ,@(recurse-on-body body)))
+
 ;; A SETF form.
 
 (def form-class setf-application-form (application-form)
@@ -152,6 +185,13 @@
 (def unwalker block-let-form ()
   (let ((rv (call-next-method)))
     `(block-let* ,(name-of -form-) ,@(cdr rv))))
+
+(def form-class block-multiple-value-bind-form (multiple-value-bind-form block-form)
+  ())
+
+(def unwalker block-multiple-value-bind-form ()
+  (let ((rv (call-next-method)))
+    `(block-multiple-value-bind ,(name-of -form-) ,@(cdr rv))))
 
 ;;; AND & OR - parse them as ordinary function calls
 
@@ -248,7 +288,7 @@
                              :name name :initial-value initial-value)
     (setf (form-c-type-of binding) (ensure-c-type-of c-type))))
 
-(def function make-lexical-var (definition parent)
+(def function make-lexical-var (definition &optional parent)
   (with-form-object (var `walked-lexical-variable-reference-form parent
                          :name (name-of definition)
                          :definition definition)

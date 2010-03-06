@@ -158,10 +158,21 @@
         (test-int (test2 1 2 :z (incf iv))
                   (test2 1 2 :c (incf iv) :z (setf iv -3)))))))
 
+(def test test/translator/compute-6 (target)
+  (test-computations (target)
+    (multiple-value-bind (a b)
+        (if t (values 1 2) (values 3 4))
+      (test-int a b)
+      (multiple-value-setq (a b) (values (1+ a) (1- b)))
+      (test-int a b))
+    (multiple-value-call (lambda (a b) (test-int a b))
+      (if nil (values 1 2) (values 3 4)))))
+
 (def test test/translator/compute (target)
   (test/translator/compute-1 target)
   (test/translator/compute-2 target)
   (test/translator/compute-3 target)
   (test/translator/compute-4 target)
-  (test/translator/compute-5 target))
+  (test/translator/compute-5 target)
+  (test/translator/compute-6 target))
 

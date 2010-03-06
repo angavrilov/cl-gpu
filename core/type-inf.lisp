@@ -66,6 +66,11 @@
           (parse-global-type type-spec)
         (if dims `(:pointer ,item) item))))
 
+(def function get-local-var-decl-type (pdecls name)
+  (aif (find-form-by-name name pdecls :type 'type-declaration-form)
+       (values (parse-local-type (declared-type-of it))
+               (declared-type-of it))))
+
 ;;; Type properties
 
 (def layered-function c-type-string (type)
@@ -137,6 +142,10 @@
       (:int64 (values (- (ash 1 63)) (1- (ash 1 63))))
       (t (values nil nil)))))
 
+(def (function i) values-c-type? (type)
+  (and (consp type)
+       (eq (car type) :values)))
+
 (def layered-function can-promote-type? (src dest)
   (:documentation "Checks if a cast from src to dest is possible.")
   (:method (src dest)
@@ -146,16 +155,29 @@
                ((:values d-min d-max) (c-int-range dest)))
           (cond ((and s-min d-min)
                  (if (and (<= d-min s-min) (>= d-max s-max)) t :warn))
+                ;; Integer vs floating-point
                 (s-min
                  (case dest
                    ((:float :double :boolean) t)))
                 (d-min
                  (case src
                    ((:float :double) :warn)))
+                ;; Floating-point
                 ((and (eq src :float) (eq dest :double))
                  t)
                 ((and (eq src :double) (eq dest :float))
-                 :warn))))))
+                 :warn)
+                ;; Recurse into (values) types
+                ((and (values-c-type? src) (values-c-type? dest))
+                 (let ((match (mapcar #'can-promote-type? (rest src) (rest dest))))
+                   (cond ((< (length src) (length dest))
+                          nil)
+                         ((some #'null match)
+                          nil)
+                         ((or (> (length src) (length dest))
+                              (member :warn match))
+                          :warn)
+                         (t t)))))))))
 
 (def (function i) align-offset (offset alignment)
   (logand (+ offset alignment -1) (lognot (1- alignment))))
@@ -217,6 +239,16 @@
   (unless (typep arr 'walked-lexical-variable-reference-form)
     (error "Must be a variable: ~S" (unwalk-form arr)))
   (verify-array arr))
+
+(def function wrap-values-type (types)
+  (cond ((cdr types)
+         (list* :values types))
+        (types
+         (car types))
+        (t :void)))
+
+(def function unwrap-values-type (type)
+  (if (values-c-type? type) (rest type) (list type)))
 
 ;;; Utilities for builtins
 
@@ -354,25 +386,47 @@
                    :prefix "assignment to ")
       (if (eq upper-type :void) :void target-type)))
 
+  (:method ((form multiple-value-setq-form) &key upper-type)
+    (bind ((var-types (mapcar #'gpu-var-ref-type (variables-of form)))
+           (target-type (wrap-values-type var-types))
+           (value-type (propagate-c-types (value-of form) :upper-type target-type))
+           (type-list (unwrap-values-type value-type)))
+      (loop for var in (variables-of form)
+         for var-type in var-types
+         for rtype = type-list then (cdr rtype)
+         for val-type = (car rtype)
+         do (progn
+              (unless val-type
+                (error "Too few values: ~S in multiple-value-setq: ~S"
+                       value-type (unwalk-form (value-of form))))
+              (when (eq (ensure-car val-type) :pointer)
+                (error "Assignment of arrays is not supported."))
+              (verify-cast val-type var-type var :prefix "assignment to ")))
+      (if (eq upper-type :void) :void (first type-list))))
+
   ;; Value group
   (:method ((form values-form) &key upper-type)
-    (let ((args (values-of form)))
-      (cond ((and (consp upper-type)
-                  (eq (first upper-type) :values))
-             (unless (= (length args) (length (rest upper-type)))
-               (error "Expecting ~A values, found ~A: ~S"
+    (let ((args (values-of form))
+          (upper-types (unwrap-values-type upper-type)))
+      (cond ((values-c-type? upper-type)
+             (unless (>= (length args) (length (rest upper-type)))
+               (error "Expecting ~A values, found only ~A: ~S"
                       (length (rest upper-type))
                       (length args) (unwalk-form form)))
-             (loop for arg in args and type in (rest upper-type)
-                do (propagate-c-types arg :upper-type type)))
+             (loop for arg in args
+                for rtype = upper-types then (cdr rtype)
+                do (propagate-c-types arg :upper-type (if rtype (car rtype) :void))))
             (args
              (propagate-c-types (first args) :upper-type upper-type)
              (dolist (arg (rest args))
-               (propagate-c-types arg :upper-type :void))))
+               (propagate-c-types arg :upper-type (if upper-type :void)))))
       (if (or (null args)
               (eq upper-type :void))
           :void
-          (list* :values (mapcar #'form-c-type-of args)))))
+          (let ((child-types (mapcar #'form-c-type-of args)))
+            (wrap-values-type (if upper-type
+                                  (subseq child-types 0 (length upper-types))
+                                  child-types))))))
 
   ;; Verbatim code
   (:method ((form verbatim-code-form) &key upper-type)
@@ -446,15 +500,14 @@
       (verify-cast rt-e rt-t form :prefix "else branch of")
       rt-t))
 
-  (:method ((form lexical-variable-binding-form) &key upper-type)
+  (:method ((form lexical-variable-binding-form) &key upper-type values-init-type)
     (declare (ignore upper-type))
-    (let* ((pdecls (declarations-of (parent-of form)))
-           (decl-spec (find-form-by-name (name-of form) pdecls
-                                         :type 'type-declaration-form))
-           (decl-type (if decl-spec
-                          (parse-local-type (declared-type-of decl-spec))))
+    (bind ((pdecls (declarations-of (parent-of form)))
+           ((:values decl-type lisp-decl-type)
+            (get-local-var-decl-type pdecls (name-of form)))
            (init-form (initial-value-of form))
-           (init-type (propagate-c-types init-form :upper-type decl-type)))
+           (init-type (or values-init-type
+                          (propagate-c-types init-form :upper-type decl-type))))
       (cond ((null decl-type)
              (setf decl-type init-type))
             ;; nil means no initialization
@@ -466,10 +519,12 @@
              (verify-cast init-type decl-type form
                           :prefix "variable initialization ")))
       (when (array-c-type? decl-type)
+        (when values-init-type
+          (error "Arrays cannot be assigned through (values)."))
         (setf (gpu-variable-of form)
               (if init-form
                   (ensure-gpu-var init-form)
-                  (make-local-var (name-of form) (declared-type-of decl-spec))))
+                  (make-local-var (name-of form) lisp-decl-type)))
         (unless (array-var? (gpu-variable-of form))
           (error "Must be an array variable: ~S" (unwalk-form form))))
       decl-type))
@@ -478,6 +533,22 @@
     (declare (ignore upper-type))
     (dolist (binding (bindings-of form))
       (propagate-c-types binding))
+    (call-next-method))
+
+  (:method ((form multiple-value-bind-form) &key upper-type)
+    (declare (ignore upper-type))
+    (bind ((decls (declarations-of form))
+           (rq-type (wrap-values-type
+                     (loop for var in (bindings-of form)
+                        collect (get-local-var-decl-type decls (name-of var)))))
+           (value-type (propagate-c-types (value-of form) :upper-type rq-type)))
+      (loop for var in (bindings-of form)
+         for rtype = (unwrap-values-type value-type) then (cdr rtype)
+         for val-type = (car rtype)
+         do (unless val-type
+              (error "Too few values: ~S in multiple-value-bind: ~S"
+                     value-type (unwalk-form (value-of form))))
+         do (propagate-c-types var :values-init-type val-type)))
     (call-next-method))
 
   (:method ((form multiple-value-prog1-form) &key upper-type)

@@ -10,13 +10,11 @@
 
 (in-package :cl-gpu)
 
-;;; Function inlining
+;;; Function inlining utils
 
 (def function remove-func-decls (decls funcs)
   (reduce (lambda (decls func)
-            (remove-if (lambda (decl) (and (typep decl 'function-declaration-form)
-                                      (eq (name-of decl) (name-of func))))
-                       decls))
+            (remove-form-by-name decls (name-of func) :type 'function-declaration-form))
           funcs :initial-value decls))
 
 (def function match-call-arguments (arg-mixin arg-vals)
@@ -43,7 +41,7 @@
     (append (loop for arg in rq-args and val in rq-vals
                collect (cons arg val))
             (loop for arg in opt-args
-               and val-list = opt-vals then #'cdr
+               and val-list = opt-vals then (cdr val-list)
                for val = (or (car val-list) (default-value-of arg))
                collect (cons arg val))
             (loop with res-args = nil
@@ -67,30 +65,66 @@
                          (return (nconc (nreverse res-args) key-args))))
             aux-args)))
 
+(def function join-call-arguments (arg-map)
+  (mapcar (lambda (item)
+            (aprog1 (car item)
+              (change-class it 'lexical-variable-binding-form)
+              (setf (initial-value-of it) (cdr item))
+              (when (cdr item)
+                (setf (parent-of (cdr item)) it))))
+          arg-map))
+
+(def function find-function-definition (parent arg &key force-copy?)
+  (atypecase arg
+    (walked-lexical-function-object-form
+     (values (deep-copy-ast (definition-of it) :parent parent)
+             (definition-of it)))
+    (walked-lexical-variable-reference-form
+     (find-function-definition parent
+                               (initial-value-of (definition-of it))
+                               :force-copy? t))
+    (lambda-function-form
+     (values (if force-copy?
+                 (deep-copy-ast it :parent parent)
+                 (prog1 it
+                   (setf (parent-of it) parent)))
+             it))))
+
+;;; The inliner core
+
 (def layered-function inline-functions (form)
   (:method ((form t))
     (do-ast-links (subform form :rewrite t)
       (setf subform (inline-functions subform)))
     form))
 
+;;; Inline stack check
+
 (defvar *function-inline-stack* nil)
 
-(def function inline-one-call (parent func args)
+(def function check-non-recursive (func form)
   (when (member func *function-inline-stack*)
-    (error "Recursive call detected: ~S" (unwalk-form func)))
-  (bind ((new-func (deep-copy-ast func :parent parent))
+    (error "Recursive call detected: ~S" (unwalk-form form))))
+
+(def macro with-inline-stack (objects &body code)
+  `(let ((*function-inline-stack*
+          (list* ,@objects *function-inline-stack*)))
+     ,@code))
+
+;;; Simple call inliner
+
+(def function inline-one-call (form func args &key no-copy?)
+  (check-non-recursive func form)
+  (bind ((new-func (if no-copy? func
+                       (deep-copy-ast func :parent (parent-of form))))
          (arg-map (match-call-arguments new-func args)))
     (change-class new-func (if (typep new-func 'block-lambda-function-form)
                                'block-let-form 'let*-form))
-    (setf (bindings-of new-func)
-          (mapcar (lambda (item)
-                    (change-class (car item) 'lexical-variable-binding-form)
-                    (setf (initial-value-of (car item)) (cdr item)
-                          (parent-of (cdr item)) (car item)))
-                  arg-map))
-    (let ((*function-inline-stack*
-           (list* new-func func *function-inline-stack*)))
+    (setf (bindings-of new-func) (join-call-arguments arg-map))
+    (with-inline-stack (new-func func)
       (inline-functions new-func))))
+
+;;; Form inline rules
 
 (def layered-methods inline-functions
   ;; Unlink local function bindings
@@ -125,10 +159,44 @@
 
   ;; Inline specific call variants
   (:method ((form walked-lexical-application-form))
-    (inline-one-call (parent-of form) (definition-of form) (arguments-of form)))
+    (inline-one-call form (definition-of form) (arguments-of form)))
 
   (:method ((form lambda-application-form))
-    (inline-one-call (parent-of form) (operator-of form) (arguments-of form))))
+    (inline-one-call form (operator-of form) (arguments-of form) :no-copy? t)))
+
+;;; Multiple-value-call handler
+
+(def layered-method inline-functions ((form multiple-value-call-form))
+  (bind (((:values defn src-defn)
+          (find-function-definition (parent-of form) (function-designator-of form))))
+    (if (null defn)
+        (call-next-method)
+        (bind ((args (loop for arg in (bindings-of defn)
+                        when (or (typep arg 'optional-function-argument-form)
+                                 (typep arg 'required-function-argument-form))
+                        collect arg
+                        else do (typecase arg
+                                  (rest-function-argument-form
+                                   (unless (find-form-by-name (name-of arg) (declarations-of defn)
+                                                              :type 'variable-ignorable-declaration-form)
+                                     (error "The rest argument must be ignored in multiple-value-call"))
+                                   (remove-form-by-name! (declarations-of defn) (name-of arg)
+                                                         :type 'variable-declaration-form))
+                                  (t
+                                   (error "Unsupported arg type in multiple-value-call inline: ~S"
+                                          arg))))))
+          (check-non-recursive src-defn form)
+          (change-class defn (if (typep defn 'block-lambda-function-form)
+                                 'block-multiple-value-bind-form 'multiple-value-bind-form))
+          (setf (bindings-of defn) (join-call-arguments (mapcar #'list args)))
+          (setf (value-of defn) (if (null (cdr (arguments-of form)))
+                                    (car (arguments-of form))
+                                    (error "Only one argument allowed in multiple-value-call")))
+          (adjust-parents (value-of defn))
+          (with-inline-stack (defn src-defn)
+            (inline-functions defn))))))
+
+;;; Misc cleanup
 
 (def function remove-functions (form)
   "Remove all remaining function bodies."

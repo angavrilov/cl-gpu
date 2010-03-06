@@ -26,6 +26,17 @@
               (list :in it))
             (getf options :mode))))
 
+(def (function e) remove-form-by-name (forms name &key (type 't))
+  (check-type name symbol)
+  (remove-if (lambda (item)
+               (and item
+                    (or (eql type t)
+                        (typep item type))
+                    (eq (name-of item) name)))
+             forms))
+
+(define-modify-macro remove-form-by-name! (name &rest flags) remove-form-by-name)
+
 (def function make-type-arg (sym)
   (format-symbol (symbol-package sym) "~A/TYPE" sym))
 

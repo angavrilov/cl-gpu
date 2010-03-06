@@ -62,7 +62,10 @@
   (:method ((form constant-form)) nil)
   (:method ((form variable-reference-form)) nil)
   (:method ((form load-time-value-form)) nil)
-  ;(:method ((form function-form)) nil)
+  ;;(:method ((form function-form)) nil)
+  ;;  values
+  (:method ((form values-form))
+    (/= (length (values-of form)) 1))
   ;;  inline C
   (:method ((form verbatim-code-form))
     (not (is-expression? form))))
@@ -295,7 +298,7 @@
              (setf (is-merged-assignment? form) t)
              (extract-nested-statements form :start-with value))
             (stmt?
-             (let ((alt (push-assignments value (list (variable-of form)))))
+             (let ((alt (push-assignments value (variables-of form))))
                (assert (is-statement? alt))
                (flatten-statements alt)))
             (t
@@ -327,6 +330,19 @@
         (extract-nested-statements form :start-with (condition-of form) :pull-root? t)
       (setf (condition-of form) new-condition)
       new-form))
+
+  (:method ((form multiple-value-bind-form))
+    ;; Convert to let
+    (let ((vars (mapcar #'make-lexical-var (bindings-of form))))
+      (with-form-object (let 'let-form (parent-of form)
+                             :bindings (bindings-of form)
+                             :declarations (declarations-of form)
+                             :body (list* (push-assignments (value-of form) vars)
+                                          (body-of form)))
+        (adjust-parents (bindings-of let))
+        (adjust-parents (declarations-of let))
+        (adjust-parents (body-of let))
+        (flatten-statements! (body-of let)))))
 
   (:method ((form multiple-value-prog1-form))
     ;; Demote to progn
