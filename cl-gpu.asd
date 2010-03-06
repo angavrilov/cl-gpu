@@ -29,7 +29,7 @@
                              (:file "inline" :depends-on ("forms"))
                              (:file "type-inf" :depends-on ("gpu-module" "forms"))
                              (:file "codegen" :depends-on ("type-inf"))
-                             (:file "unnest" :depends-on ("type-inf"))
+                             (:file "unnest" :depends-on ("type-inf" "side-effects"))
                              (:file "side-effects" :depends-on ("gpu-module" "forms"))
                              (:file "builtins" :depends-on ("type-inf" "codegen" "unnest" "side-effects"))
                              (:file "syntax" :depends-on ("inline" "type-inf"))))

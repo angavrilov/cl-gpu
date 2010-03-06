@@ -72,6 +72,22 @@
 
 ;;; Convert value return to side effects
 
+(def function compute-self-assign-conflicts (vals vars)
+  "Computes which vars would cause setq and psetq results to differ."
+  (let* ((vdefs (mapcar #'definition-of vars))
+         (effects
+          (reduce (lambda (effects arg-effects)
+                    (bind (((:values r-a-w w-a-r)
+                            (side-effect-conflicts (car effects) arg-effects)))
+                      (cons (join-side-effects (car effects) arg-effects)
+                            (union (cdr effects) (union r-a-w w-a-r)))))
+                  (mapcar (lambda (arg var)
+                            (join-side-effects (side-effects-of arg)
+                                               (make-side-effects :writes (list var))))
+                          vals vdefs)
+                  :initial-value (cons nil nil))))
+    (intersection vdefs (cdr effects))))
+
 (define-modify-macro push-assignments! (varlist) push-assignments)
 
 (def layered-function push-assignments (form varlist)
@@ -116,13 +132,35 @@
 
   (:method ((form values-form) varlist)
     (assert (<= (length varlist) (length (values-of form))))
-    (with-form-object (progn 'progn-form (parent-of form)
-                             :body (copy-list (values-of form)))
-      (setf (form-c-type-of progn) :void)
-      (loop
-         for tail on (body-of progn)
-         and var in varlist
-         do (push-assignments! (car tail) (list var)))))
+    (let ((side-effect-conflicts
+           (when (side-effects-of form)
+             (compute-self-assign-conflicts (values-of form) varlist))))
+      ;; Allocate a let or progn depending on the necessity
+      ;; of side effect conflict resolution:
+      (with-form-object (blk (if side-effect-conflicts
+                                 'let-form 'progn-form)
+                               (parent-of form)
+                               :body (copy-list (values-of form)))
+        (adjust-parents (body-of blk))
+        (setf (form-c-type-of blk) :void)
+        ;; Allocate new temporary vars
+        (let ((aux-vars
+               (loop for defn in side-effect-conflicts
+                  for binding = (make-lexical-binding blk :c-type defn)
+                  collect (cons defn binding))))
+          ;; Push assignments
+          (loop
+             for tail on (body-of blk)
+             and var in varlist
+             for aux-var = (assoc (definition-of var) aux-vars)
+             for res-var = (if aux-var (make-lexical-var (cdr aux-var)) var)
+             do (push-assignments! (car tail) (list res-var)))
+          ;; If used temporaries, forward values to the real targets
+          (when aux-vars
+            (setf (bindings-of blk) (mapcar #'cdr aux-vars))
+            (appendf (body-of blk)
+                     (loop for aux-var in aux-vars
+                        collect (make-lexical-assignment (car aux-var) (cdr aux-var) blk))))))))
 
   (:method ((form block-form) varlist)
     (dolist (ret (usages-of form))

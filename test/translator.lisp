@@ -164,6 +164,8 @@
         (if t (values 1 2) (values 3 4))
       (test-int a b)
       (multiple-value-setq (a b) (values (1+ a) (1- b)))
+      (test-int a b)
+      (multiple-value-setq (a b) (values (+ b 2) (- a 3)))
       (test-int a b))
     (multiple-value-call (lambda (a b) (test-int a b))
       (if nil (values 1 2) (values 3 4)))))

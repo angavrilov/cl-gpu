@@ -295,6 +295,12 @@
     (setf (form-c-type-of var)
           (form-c-type-of definition))))
 
+(def function make-lexical-assignment (dest-def src-def &optional parent)
+  (with-form-object (assn 'setq-form parent)
+    (setf (variable-of assn) (make-lexical-var dest-def assn)
+          (value-of assn) (make-lexical-var src-def assn))
+    (setf (form-c-type-of assn) (form-c-type-of dest-def))))
+
 (def function wrap-body-in-form (parent body &key declarations)
   (cond (declarations
          (with-form-object (obj 'locally-form parent
