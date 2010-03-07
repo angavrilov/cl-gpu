@@ -213,9 +213,10 @@
 ;;; Special variable extraction.
 
 (defparameter *cur-special-bindings* nil)
+(defparameter *cur-catch-tags* nil)
 
 (def function walk-tree-with-specials (tree visitor)
-  "Recurse into the tree, tracking the active special bindings."
+  "Recurse into the tree, tracking the active special bindings & catch tags."
   (labels ((recurse-block (form)
              (dolist (decl (declarations-of form))
                (recurse form 'declarations decl))
@@ -245,14 +246,19 @@
                (multiple-value-bind-form
                 (recurse form 'value (value-of form))
                 (recurse-let form))
+               (catch-form
+                (let* ((tag (ensure-constant (tag-of form)))
+                       (*cur-catch-tags* (list* (cons tag form) *cur-catch-tags*)))
+                  (enum-ast-links form #'recurse)
+                  (funcall visitor form)))
                (t
                 (enum-ast-links form #'recurse)
                 (funcall visitor form)))))
     (declare (dynamic-extent #'recurse #'recurse-block))
     (recurse nil nil tree)))
 
-(def function pull-global-refs (tree)
-  "Convert all special refs to &aux arguments, and bindings to lexical vars."
+(def function lexicalize-dynamic-refs (tree)
+  "Convert all special refs to &aux arguments, bindings to lexical vars and catch to block."
   (with-accessors ((top-args bindings-of)
                    (top-decls declarations-of)) tree
     (let ((arg-cache nil))
@@ -304,7 +310,15 @@
                            (unwalk-form form)))
                    ((or lexical-variable-binder-form multiple-value-bind-form)
                     (dolist (var (bindings-of form))
-                      (setf (special-binding? var) nil))))))
+                      (setf (special-binding? var) nil)))
+                   (catch-form
+                    (change-class form 'block-form :name (ensure-constant (tag-of form))))
+                   (throw-form
+                    (aif (assoc (ensure-constant (tag-of form)) *cur-catch-tags*)
+                         ;; Likewise, convert throw to return-from
+                         (change-class form 'return-from-form
+                                       :target-block (cdr it) :result (value-of form))
+                         (error "Throw without a catch: ~S" (unwalk-form form)))))))
         (dolist (item (body-of tree))
           (walk-tree-with-specials item #'visitor))))))
 
@@ -312,7 +326,7 @@
   ;; Inline functions
   (setf tree (inline-all-functions tree))
   ;; Convert global var refs to &aux args.
-  (pull-global-refs tree)
+  (lexicalize-dynamic-refs tree)
   ;; Mark bindings that are destructively assigned to.
   (mark-mutated-vars tree)
   ;; Collect the binding usage lists.

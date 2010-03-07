@@ -188,6 +188,15 @@
           (test-int (test1 7) *test-int-1*)))
       (is (= *test-int-1* 3)))))
 
+(def test test/translator/compute-8 (target)
+  (test-computations (target)
+    (labels ((test1 (a) (throw 'foo (+ a 3))))
+      (test-int (catch 'foo (test1 3))
+                (catch 'foo (test1 4)))
+      (catch 'foo
+        (test-int (catch 'foo (test1 5))
+                  (catch 'foo (test1 6)))))))
+
 (def test test/translator/compute (target)
   (test/translator/compute-1 target)
   (test/translator/compute-2 target)
@@ -195,5 +204,6 @@
   (test/translator/compute-4 target)
   (test/translator/compute-5 target)
   (test/translator/compute-6 target)
-  (test/translator/compute-7 target))
+  (test/translator/compute-7 target)
+  (test/translator/compute-8 target))
 
