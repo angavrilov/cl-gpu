@@ -51,6 +51,11 @@
     (:pointer +cuda-ptr-size+)
     (otherwise (call-next-method))))
 
+(def layered-method emit-abort-command :in cuda-target (stream exception args)
+  (declare (ignore exception args))
+  (format stream "__trap();")
+  (emit-code-newline stream))
+
 (def function lookup-cuda-module (module-id)
   (let* ((context (cuda-current-context))
          (instance (gethash-with-init module-id (cuda-context-module-hash context)

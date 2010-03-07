@@ -75,26 +75,65 @@
 (def side-effects (setf aref) (arr &rest indexes)
   (make-side-effects :writes (list (ensure-gpu-var arr))))
 
-(def function emit-aref-core (var indexes stream)
-  (let* ((gpu-var (ensure-gpu-var var))
-         (rank (length (dimension-mask-of gpu-var))))
-    (assert (= (length indexes) rank))
-    (format stream "~A[" (generate-var-ref gpu-var))
-    (loop for i from 0 and idx in indexes
-       when (> i 0) do
-         (princ "+" stream)
-       do (emit-c-code idx stream)
-       when (< i (1- rank)) do
-         (format stream "*~A" (generate-array-stride gpu-var i)))
-    (princ "]" stream)))
+(def function emit-aref-expr (stream gpu-var rank indexes)
+  (format stream "~A[" (generate-var-ref gpu-var))
+  (loop for i from 0 and idx in indexes
+     when (> i 0) do
+     (princ "+" stream)
+     do (emit-c-code idx stream)
+     when (< i (1- rank)) do
+     (format stream "*~A" (generate-array-stride gpu-var i)))
+  (princ "]" stream))
+
+(def is-statement? aref (arr &rest indexes)
+  (is-optimize-level? 'safety 1))
+
+(def is-statement? (setf aref) (arr &rest indexes)
+  (is-optimize-level? 'safety 1))
+
+(def function emit-aref-core (form var indexes stream &optional value)
+  (with-c-code-emitter-lexicals (stream)
+    (let* ((gpu-var (ensure-gpu-var var))
+           (rank (length (dimension-mask-of gpu-var))))
+      (assert (= (length indexes) rank))
+      (if (is-optimize-level? 'safety 1)
+          ;; With bound checks
+          (with-c-code-block (stream)
+            (loop for i from 0 and index in indexes
+               for idxname = (format nil "IDX~A" i)
+               for dimname = (format nil "DIM~A" i)
+               do (code "unsigned " idxname " = " index ";" #\Newline
+                        "unsigned " dimname " = " (generate-array-dim gpu-var i) ";" #\Newline)
+               collect idxname into idxs
+               collect (list :uint32 idxname) into idxinfos
+               collect (list :uint32 dimname) into diminfos
+               collect (format nil "~A>=~A" idxname dimname) into checks
+               finally
+                 (progn
+                   (code "if ")
+                   (emit-separated stream checks " || ")
+                   (code " ")
+                   (emit-abort-command stream "Bad AREF index ~#@{~A ~} for dims ~#@{~A ~} of ~S"
+                                       (append (list i) idxinfos (list i) diminfos (list (name-of var))))
+                   (force-emit-merged-assignment stream form 0
+                                                 (with-output-to-string (sv)
+                                                   (emit-aref-expr sv gpu-var rank idxs)))
+                   (when value
+                     (code " = " value))
+                   (code ";"))))
+          ;; Without bound checks
+          (progn
+            (when value
+              (code "("))
+            (emit-aref-expr stream gpu-var rank indexes)
+            (when value
+              (code " = " value ")")))))))
 
 (def c-code-emitter aref (var &rest indexes)
-  (emit-aref-core var indexes -stream-))
+  (emit-aref-core -form- var indexes -stream-))
 
 (def c-code-emitter (setf aref) (var &rest indexes)
-  (code "(")
-  (emit-aref-core var indexes -stream-)
-  (code " = " -value- ")"))
+  (emit-aref-core -form- var indexes -stream- -value-))
 
 ;;; RAW-AREF
 
@@ -122,15 +161,42 @@
 (def side-effects (setf raw-aref) (arr index)
   (make-side-effects :writes (list (ensure-gpu-var arr))))
 
+(def is-statement? raw-aref (arr index)
+  (is-optimize-level? 'safety 1))
+
+(def is-statement? (setf raw-aref) (arr index)
+  (is-optimize-level? 'safety 1))
+
+(def function emit-raw-aref-core (form var index stream &optional value)
+  (with-c-code-emitter-lexicals (stream)
+    (let* ((gpu-var (ensure-gpu-var var))
+           (refname (generate-var-ref gpu-var)))
+      (if (is-optimize-level? 'safety 1)
+          ;; With bound checks
+          (with-c-code-block (stream)
+            (code "unsigned IDX = " index ";" #\Newline
+                  "unsigned EXT = " (generate-array-extent gpu-var) ";" #\Newline
+                  "if (IDX >= EXT) ")
+            (emit-abort-command stream "Bad RAW-AREF index ~A (extent ~A of ~S)"
+                                (list '(:uint32 "IDX") '(:uint32 "EXT") (name-of var)))
+            (force-emit-merged-assignment stream form 0
+                                          (format nil "~A[IDX]" refname))
+            (when value
+              (code " = " value))
+            (code ";"))
+          ;; Without bound checks
+          (progn
+            (when value
+              (code "("))
+            (code refname "[" index "]")
+            (when value
+              (code " = " value ")")))))))
+
 (def c-code-emitter raw-aref (var index)
-  (let ((gpu-var (ensure-gpu-var var)))
-    (emit "~A[" (generate-var-ref gpu-var))
-    (code index "]")))
+  (emit-raw-aref-core -form- var index -stream-))
 
 (def c-code-emitter (setf raw-aref) (var index)
-  (let ((gpu-var (ensure-gpu-var var)))
-    (emit "(~A[" (generate-var-ref gpu-var))
-    (code index "] = " -value- ")")))
+  (emit-raw-aref-core -form- var index -stream- -value-))
 
 ;;; Misc array properties
 

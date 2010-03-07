@@ -29,7 +29,8 @@
    ;; Body
    (let ((all-args (flatten (list rq-args (mapcar #'first opt-args) rest-arg))))
      `((declare (ignorable ,@all-args))
-       ,@code))))
+       ,@code))
+   :let-decls (if assn? '((ignorable -value-)))))
 
 (def layered-function is-statement? (form)
   ;; Built-in functions:
@@ -319,8 +320,9 @@
   (:method ((form setq-form))
     (let* ((value (value-of form))
            (stmt? (is-statement? value)))
-      (cond ((and stmt? (or (typep value 'free-application-form)
-                            (typep value 'verbatim-code-form)))
+      (cond ((and stmt? (typep value '(or free-application-form
+                                          setf-application-form
+                                          verbatim-code-form)))
              ;; Some forms return values, but do it explicitly in
              ;; their code generators:
              (setf (is-merged-assignment? form) t)
@@ -335,8 +337,9 @@
   (:method ((form multiple-value-setq-form))
     (let* ((value (value-of form))
            (stmt? (is-statement? value)))
-      (cond ((and stmt? (or (typep value 'free-application-form)
-                            (typep value 'verbatim-code-form)))
+      (cond ((and stmt? (typep value '(or free-application-form
+                                          setf-application-form
+                                          verbatim-code-form)))
              (setf (is-merged-assignment? form) t)
              (extract-nested-statements form :start-with value))
             (stmt?

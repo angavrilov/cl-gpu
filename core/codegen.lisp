@@ -43,6 +43,9 @@
 (def layered-function generate-invoker-form (obj)
   (:documentation "Creates a lambda form to invoke the kernel."))
 
+(def layered-function emit-abort-command (stream exception args)
+  (:documentation "Emits code that reports the specified error and aborts."))
+
 ;;; Local variables
 
 (def layered-method generate-c-code ((var gpu-local-var))
@@ -250,6 +253,15 @@
   `(let ((*c-code-indent* (+ *c-code-indent* *c-code-indent-step*)))
      ,@code))
 
+(def macro with-c-code-block ((stream) &body code)
+  `(progn
+     (princ "{" ,stream)
+     (with-indented-c-code
+       (emit-code-newline ,stream)
+       ,@code)
+     (emit-code-newline ,stream)
+     (princ "}" ,stream)))
+
 (def layered-function emit-c-code (form stream &key &allow-other-keys))
 
 (def layered-function emit-call-c-code (name form stream &key)
@@ -262,6 +274,22 @@
     (declare (ignore stream))
     (error "Unsupported l-value function: ~A in ~S" name (unwalk-form form))))
 
+(def macro with-c-code-emitter-lexicals ((stream) &body code)
+  `(macrolet ((emit (format &rest args)
+                `(format ,',stream ,format ,@args))
+              (recurse (form &rest args)
+                `(emit-c-code ,form ,',stream ,@args))
+              (code (&rest args)
+                `(progn ,@(mapcar (lambda (arg)
+                                    (typecase arg
+                                      (string `(princ ,arg ,',stream))
+                                      (character (if (eql arg #\Newline)
+                                                     `(emit-code-newline ,',stream)
+                                                     `(princ ,arg ,',stream)))
+                                      (t `(recurse ,arg))))
+                                  args))))
+     ,@code))
+
 (def definer c-code-emitter (name args &body code)
   (make-builtin-handler-method
    ;; Builtin prototype + method name
@@ -269,16 +297,7 @@
    ;; Body
    code
    :method-args `(-stream- &key)
-   :prefix `(macrolet ((emit (format &rest args)
-                         `(format -stream- ,format ,@args))
-                       (recurse (form &rest args)
-                         `(emit-c-code ,form -stream- ,@args))
-                       (code (&rest args)
-                         `(progn ,@(mapcar (lambda (arg)
-                                             (typecase arg
-                                               (string `(princ ,arg -stream-))
-                                               (t `(recurse ,arg))))
-                                           args)))))))
+   :prefix `(with-c-code-emitter-lexicals (-stream-))))
 
 (def function emit-verbatim-item (item stream)
   (typecase item
@@ -298,6 +317,11 @@
   (let ((parent (parent-of form)))
     (check-type parent (or multiple-value-setq-form setq-form))
     (emit-c-code parent stream :merged-index index :merged-node node)))
+
+(def function force-emit-merged-assignment (stream form index node)
+  (unless (and (has-merged-assignment? form)
+               (emit-merged-assignment stream form index node))
+    (emit-verbatim-item node stream)))
 
 (def macro newline-unless-first! (first stream)
   `(if ,first (setf ,first nil)
@@ -382,10 +406,10 @@
   (:method ((form verbatim-code-form) stream &key)
     (do-verbatim-code (item flags form :flatten? t)
       (aif (getf flags :return-nth)
-           (when (and (not (and (has-merged-assignment? form)
-                                (emit-merged-assignment stream form it item)))
-                      (getf flags :force-return))
-             (emit-verbatim-item item stream))
+           (if (getf flags :force-return)
+               (force-emit-merged-assignment stream form it item)
+               (when (has-merged-assignment? form)
+                 (emit-merged-assignment stream form it item)))
            (emit-verbatim-item item stream))))
 
   ;; Local variables
@@ -414,12 +438,8 @@
           (inside-block?         ; merge with the upper block
            (call-next-method))
           (t                     ; print a new block
-           (princ "{" stream)
-           (with-indented-c-code
-             (emit-code-newline stream)
-             (call-next-method))
-           (emit-code-newline stream)
-           (princ "}" stream))))
+           (with-c-code-block (stream)
+             (call-next-method)))))
 
   (:method ((form implicit-progn-mixin) stream &key)
     (if (is-expression? form)    ; use the comma operator
@@ -528,21 +548,15 @@
           (t                     ; use the if statement
            (princ "if (" stream)
            (emit-c-code (condition-of form) stream)
-           (princ ") {" stream)
-           (with-indented-c-code
-             (emit-code-newline stream)
+           (princ ") " stream)
+           (with-c-code-block (stream)
              (emit-c-code (then-of form) stream :inside-block? t)
              (princ ";" stream))
-           (emit-code-newline stream)
-           (princ "}" stream)
            (unless (nop-form? (else-of form))
-             (princ " else {" stream)
-             (with-indented-c-code
-               (emit-code-newline stream)
+             (princ " else " stream)
+             (with-c-code-block (stream)
                (emit-c-code (else-of form) stream :inside-block? t)
-               (princ ";" stream))
-             (emit-code-newline stream)
-             (princ "}" stream)))))
+               (princ ";" stream))))))
   )
 
 ;;; Utilities

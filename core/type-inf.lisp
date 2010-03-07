@@ -275,7 +275,7 @@
 (def function make-local-c-name (name)
   (unique-c-name name (unique-name-tbl-of *cur-gpu-function*)))
 
-(def function make-local-var (name type-spec &key from-c-type?)
+(def function make-local-var (name type-spec &key from-c-type? (c-name (make-local-c-name name)))
   (multiple-value-bind (item-type dims)
       (if from-c-type?
           (aprog1 type-spec
@@ -284,8 +284,7 @@
     (when (and dims (not (every #'numberp dims)))
       (error "Local arrays must have fixed dimensions: ~S" type-spec))
     (make-instance 'gpu-local-var
-                   :name name
-                   :c-name (make-local-c-name name)
+                   :name name :c-name c-name
                    :item-type item-type :dimension-mask dims)))
 
 ;;; Type propagation engine
