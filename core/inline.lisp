@@ -4,7 +4,7 @@
 ;;;
 ;;; See LICENCE for details.
 ;;;
-;;; This file implements function inlining and global
+;;; This file implements function inlining and special
 ;;; variable reference extraction.
 ;;;
 
@@ -210,68 +210,111 @@
 (def function inline-all-functions (form)
   (remove-functions (inline-functions form)))
 
-;;; Global extraction
+;;; Special variable extraction.
+
+(defparameter *cur-special-bindings* nil)
+
+(def function walk-tree-with-specials (tree visitor)
+  "Recurse into the tree, tracking the active special bindings."
+  (labels ((recurse-block (form)
+             (dolist (decl (declarations-of form))
+               (recurse form 'declarations decl))
+             (dolist (item (body-of form))
+               (recurse form 'body item))
+             (funcall visitor form))
+           (recurse-let (form)
+             (let ((new-bindings *cur-special-bindings*))
+               (dolist (var (bindings-of form))
+                 (recurse form 'bindings var)
+                 (when (special-binding? var)
+                   (push (cons (name-of var) var) new-bindings)))
+               (let ((*cur-special-bindings* new-bindings))
+                 (recurse-block form))))
+           (recurse (parent field form)
+             (declare (ignore parent field))
+             (typecase form
+               (let*-form
+                (let ((*cur-special-bindings* *cur-special-bindings*))
+                  (dolist (var (bindings-of form))
+                    (recurse form 'bindings var)
+                    (when (special-binding? var)
+                      (push (cons (name-of var) var) *cur-special-bindings*)))
+                  (recurse-block form)))
+               (let-form
+                (recurse-let form))
+               (multiple-value-bind-form
+                (recurse form 'value (value-of form))
+                (recurse-let form))
+               (t
+                (enum-ast-links form #'recurse)
+                (funcall visitor form)))))
+    (declare (dynamic-extent #'recurse #'recurse-block))
+    (recurse nil nil tree)))
 
 (def function pull-global-refs (tree)
-  "Convert all special refs to &aux arguments."
+  "Convert all special refs to &aux arguments, and bindings to lexical vars."
   (with-accessors ((top-args bindings-of)
                    (top-decls declarations-of)) tree
     (let ((arg-cache nil))
-      (flet ((close-special-var (form)
-               (let ((arg-def
-                      (or (cdr (assoc (name-of form) arg-cache))
-                          ;; Add a new aux argument
-                          (let ((name (name-of form))
-                                (type (or (declared-type-of form) t)))
-                            ;; Use type declarations via (the ... *foo*)
-                            (when (and (unknown-type? type)
-                                       (typep (parent-of form) 'the-form))
-                              (setf type (declared-type-of (parent-of form))))
-                            ;; Assert that the type is known
-                            (when (unknown-type? type)
-                              (error "Unknown global variable type: ~S" name))
-                            ;; Create the argument
-                            (let* ((new-id (make-symbol (string name)))
-                                   (arg (with-form-object (arg 'auxiliary-function-argument-form tree
-                                                               :name new-id)
-                                          (setf (default-value-of arg)
-                                                (walk-form `(locally (declare (special ,name))
-                                                              ,name)
-                                                           :parent arg)))))
-                              (nconcf top-args (list arg))
-                              (push (cons name arg) arg-cache)
-                              (with-form-object (decl 'type-declaration-form tree
-                                                      :name new-id :declared-type type)
-                                (nconcf top-decls (list decl)))
-                              arg)))))
-                 (change-class form 'walked-lexical-variable-reference-form
-                               :name (name-of arg-def) :definition arg-def)
-                 nil)))
-        (map-ast (lambda (form)
-                   (if (member form top-args)
-                       nil ; Don't process top args to avoid cycles
-                       (typecase form
-                         (special-variable-reference-form
-                          (close-special-var form))
-                         (unwalked-lexical-variable-reference-form
-                          (error "Closing over lexical variables is not supported: ~S"
-                                 (unwalk-form form)))
-                         (lexical-variable-binding-form
-                          (when (special-binding? form)
-                            (error "Binding special variables is not supported: ~S"
-                                   (unwalk-form form)))
-                          form)
-                         (t form))))
-                 tree)))))
+      (labels ((close-special-var (form)
+                 (when (typep (parent-of form)
+                              '(or setq-form multiple-value-setq-form))
+                   (warn "Write to special variable ~S has been localized."
+                         (name-of form)))
+                 (let ((arg-def
+                        (or (cdr (assoc (name-of form) arg-cache))
+                            ;; Add a new aux argument
+                            (let ((name (name-of form))
+                                  (type (or (declared-type-of form) t)))
+                              ;; Use type declarations via (the ... *foo*)
+                              (when (and (unknown-type? type)
+                                         (typep (parent-of form) 'the-form))
+                                (setf type (declared-type-of (parent-of form))))
+                              ;; Assert that the type is known
+                              (when (unknown-type? type)
+                                (error "Unknown global variable type: ~S" name))
+                              ;; Create the argument
+                              (let* ((new-id (make-symbol (string name)))
+                                     (arg (with-form-object (arg 'auxiliary-function-argument-form tree
+                                                                 :name new-id)
+                                            (setf (default-value-of arg)
+                                                  (walk-form `(locally (declare (special ,name))
+                                                                ,name)
+                                                             :parent arg)))))
+                                (nconcf top-args (list arg))
+                                (push (cons name arg) arg-cache)
+                                (with-form-object (decl 'type-declaration-form tree
+                                                        :name new-id :declared-type type)
+                                  (nconcf top-decls (list decl)))
+                                arg)))))
+                   (change-class form 'walked-lexical-variable-reference-form
+                                 :name (name-of arg-def) :definition arg-def)))
+               (visitor (form)
+                 (typecase form
+                   (special-variable-reference-form
+                    (aif (assoc (name-of form) *cur-special-bindings*)
+                         ;; Once the functions are completely inlined,
+                         ;; dynamic scope is equal to lexical, and
+                         ;; specials can be converted to normal vars.
+                         (change-class form 'walked-lexical-variable-reference-form
+                                       :definition (cdr it))
+                         (close-special-var form)))
+                   (unwalked-lexical-variable-reference-form
+                    (error "Closing over lexical variables is not supported: ~S"
+                           (unwalk-form form)))
+                   ((or lexical-variable-binder-form multiple-value-bind-form)
+                    (dolist (var (bindings-of form))
+                      (setf (special-binding? var) nil))))))
+        (dolist (item (body-of tree))
+          (walk-tree-with-specials item #'visitor))))))
 
 (def function preprocess-tree (tree global-vars)
   ;; Inline functions
   (setf tree (inline-all-functions tree))
-  ;; Mark bindings that are destructively assigned to.
-  ;; This also checks absence of assignments to special vars.
-  (mark-mutated-vars tree)
   ;; Convert global var refs to &aux args.
   (pull-global-refs tree)
+  ;; Mark bindings that are destructively assigned to.
+  (mark-mutated-vars tree)
   ;; Collect the binding usage lists.
   (annotate-binding-usage (list* tree (mapcar #'form-of global-vars)))
   tree)
