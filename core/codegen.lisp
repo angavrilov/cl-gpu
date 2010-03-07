@@ -443,6 +443,11 @@
              (when first
                (princ ";" stream)))))
 
+  (:method ((form implicit-progn-with-declarations-mixin) stream &key)
+    (declare (ignore stream))
+    (with-optimize-context (form)
+      (call-next-method)))
+
   ;; LET/LET*
   (:method :around ((form lexical-variable-binder-form) stream &key)
     (call-next-layered-method form stream :inside-block? nil))

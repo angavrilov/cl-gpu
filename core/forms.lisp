@@ -236,7 +236,49 @@
        (destructuring-bind ,args (cdr ,whole)
          ,@code))))
 
-;;;
+;;; Optimize decls
+
+(declaim (declaration gpu-optimize))
+
+(def form-class gpu-optimize-declaration-form (declaration-form)
+  (specification))
+
+(def unwalker gpu-optimize-declaration-form (specification)
+  `(gpu-optimize ,specification))
+
+(defparameter *known-optimize-flags* '(debug speed safety space))
+
+(def declaration-walker gpu-optimize (&rest specs)
+  (do-list-collect (optimize-spec specs)
+    (unless (member (ensure-car optimize-spec) *known-optimize-flags*)
+      (warn "Unknown GPU optimize setting: ~S" optimize-spec))
+    (make-declaration 'gpu-optimize-declaration-form :specification optimize-spec)))
+
+(defparameter *optimize-flags* '((safety 1) (debug 1)))
+
+(def (function i) get-optimize-value (name &optional (default 0) (implicit 3))
+  (aif (assoc name *optimize-flags*)
+       (if (cdr it) (cadr it) implicit)
+       default))
+
+(def (function i) is-optimize-level? (name value)
+  (>= (get-optimize-value name) value))
+
+(def function collect-optimize-decls (form)
+  (loop for decl in (declarations-of form)
+     when (typep decl 'optimize-declaration-form)
+     collect (ensure-cons (specification-of decl)) into lisp-decls
+     when (typep decl 'gpu-optimize-declaration-form)
+     collect (ensure-cons (specification-of decl)) into gpu-decls
+     finally
+       (return (nconc gpu-decls lisp-decls))))
+
+(def macro with-optimize-context ((form) &body code)
+  `(let ((*optimize-flags*
+          (nconc (collect-optimize-decls ,form) *optimize-flags*)))
+     ,@code))
+
+;;; Misc
 
 (def function has-merged-assignment? (form)
   (atypecase (parent-of form)

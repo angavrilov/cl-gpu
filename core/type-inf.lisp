@@ -452,6 +452,11 @@
                                           :upper-type upper-type)))
             (if (eq upper-type :void) :void rtype)))))
 
+  (:method ((form implicit-progn-with-declarations-mixin) &key upper-type)
+    (declare (ignore upper-type))
+    (with-optimize-context (form)
+      (call-next-method)))
+
   (:method ((form tagbody-form) &key upper-type)
     (declare (ignore upper-type))
     (dolist (item (body-of form))

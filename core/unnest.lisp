@@ -264,6 +264,10 @@
     (flatten-statements! (body-of form))
     form)
 
+  (:method ((form implicit-progn-with-declarations-mixin))
+    (with-optimize-context (form)
+      (call-next-method)))
+
   ;; Variable bindings: may split
   (:method ((form lexical-variable-binder-form))
     (flet (;; Splits the binding statement after the point
