@@ -57,7 +57,8 @@
   (emit-code-newline stream))
 
 (def function lookup-cuda-module (module-id)
-  (let* ((context (cuda-current-context))
+  (let* ((context (or (cuda-current-context)
+                      (error "No CUDA context is active.")))
          (instance (gethash-with-init module-id (cuda-context-module-hash context)
                                       (with-cuda-target
                                         (load-gpu-module-instance module-id)))))
@@ -372,6 +373,7 @@
       (setf (includes-locked? arg) t))))
 
 (def layered-method compile-object :in cuda-target ((module gpu-module))
+  (call-next-method)
   (setf (compiled-code-of module)
         (cuda-compile-kernel (generate-c-code module))))
 

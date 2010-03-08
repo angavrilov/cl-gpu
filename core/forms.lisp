@@ -34,6 +34,11 @@
 
 (defstruct side-effects reads writes)
 
+(def method make-load-form ((obj side-effects) &optional env)
+  (declare (ignore env))
+  `(make-side-effects :reads (list ,@(side-effects-reads obj))
+                      :writes (list ,@(side-effects-writes obj))))
+
 (def form-attribute-accessor side-effects :type side-effects)
 
 ;; A wrapper for global variables

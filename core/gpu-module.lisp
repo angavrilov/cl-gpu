@@ -42,7 +42,7 @@
 
 ;;; Module object classes
 
-(def class* gpu-variable ()
+(def class* gpu-variable (save-slots-mixin)
   ((name           :documentation "Lisp name of the variable")
    (c-name         :documentation "C name of the variable")
    (item-type      :documentation "Type without array dimensions")
@@ -77,6 +77,11 @@
    (form           :documentation "Global var binding form for this var."))
   (:documentation "A global variable in a GPU module."))
 
+(def method make-load-form :before ((object gpu-global-var) &optional env)
+  (declare (ignore env))
+  (awhen (form-of object)
+    (setf (usages-of it) nil)))
+
 (def class* gpu-argument (gpu-variable)
   ((includes-locked? nil :accessor includes-locked? :type boolean)
    (include-size?    nil :accessor include-size? :type boolean)
@@ -86,6 +91,10 @@
    (keyword          nil :documentation "If set, specifies a keyword parameter.")
    (default-value    nil :documentation "Form to evaluate"))
   (:documentation "A GPU function or kernel parameter."))
+
+(def function required-argument? (arg)
+  (and (null (default-value-of arg))
+       (null (keyword-of arg))))
 
 (def method initialize-instance :after ((obj gpu-argument) &key &allow-other-keys)
   (with-slots (dimension-mask included-dims included-strides
@@ -102,7 +111,7 @@
 
 (defparameter *cur-gpu-function* nil)
 
-(def class* gpu-function ()
+(def class* gpu-function (save-slots-mixin)
   ((name           :documentation "Lisp name of the function")
    (c-name         :documentation "C name of the function")
    (return-type    :documentation "Return type")
@@ -120,7 +129,20 @@
   (:default-initargs :return-type :void)
   (:documentation "A kernel callable from the host"))
 
-(def class* gpu-module ()
+(def method make-load-form ((object gpu-kernel) &optional env)
+  (declare (ignore env))
+  (multiple-value-bind (make init)
+      (with-exclude-save-slots (invoker-fun)
+        (call-next-method))
+    ;; Functions are not externalizable, so expand it as an init form.
+    (values make
+            (if (invoker-form-of object)
+                `(progn ,init
+                        (setf (slot-value ,object 'invoker-fun)
+                              (function ,(invoker-form-of object))))
+                init))))
+
+(def class* gpu-module (save-slots-mixin)
   ((name            :documentation "Lisp name of the module")
    (globals         :documentation "List of global variables")
    (functions       :documentation "List of helper functions")
@@ -134,19 +156,31 @@
   (:documentation "A module that can be loaded to the GPU."))
 
 (def constructor gpu-module
+  ;; Retrieve the index table from the global instance
   (unless (slot-boundp -self- 'index-table)
     (setf (index-table-of -self-)
-          (aif (name-of -self-)
-               (aif (find-gpu-module it)
-                    (index-table-of it)
-                    nil)
+          (aif (aand (name-of -self-)
+                     (find-gpu-module it))
+               (index-table-of it)
                nil))))
 
 (def layered-function compile-object (module)
-  (:method ((obj t)) nil))
+  (:method ((obj t)) nil)
+  (:method :around ((obj gpu-function))
+    (let ((*cur-gpu-function* obj))
+      (call-next-method)))
+  (:method ((obj gpu-module))
+    (dolist (krnl (kernels-of obj))
+      (compile-object krnl))))
 
 (def layered-function post-compile-object (module)
-  (:method ((obj t)) nil))
+  (:method ((obj t)) nil)
+  (:method :around ((obj gpu-function))
+    (let ((*cur-gpu-function* obj))
+      (call-next-method)))
+  (:method ((obj gpu-module))
+    (dolist (krnl (kernels-of obj))
+      (post-compile-object krnl))))
 
 ;;; Namespace
 
@@ -161,7 +195,7 @@
                         (entry (assoc key index-table :test #'equal))
                         (nidx (cdr entry)))
                    (if (slot-boundp item 'index)
-                       ;; Already has an index
+                       ;; Already has an index: update the mapping
                        (let ((cur-idx (index-of item)))
                          (maxf max-idx cur-idx)
                          (unless (and nidx (= nidx cur-idx))
@@ -207,16 +241,11 @@
 
 (def function compile-gpu-module (module)
   (with-current-target
-    (dolist (krnl (kernels-of module))
-      (let ((*cur-gpu-function* krnl))
-        (compile-object krnl)))
     (compile-object module))
-  (aprog1 (finalize-gpu-module module)
-    (with-current-target
-      (dolist (krnl (kernels-of it))
-        (let ((*cur-gpu-function* krnl))
-          (post-compile-object krnl)))
-      (post-compile-object it))))
+  (reindex-gpu-module module)
+  (with-current-target
+    (post-compile-object module))
+  module)
 
 ;;; Instance management
 
@@ -282,8 +311,15 @@
 
 ;;;
 
-(def (function i) get-module-instance (module-id)
+(declaim (inline get-module-instance get-module-instance-items)
+         (ftype (function (t) simple-vector) get-module-instance-item))
+
+(def function get-module-instance (module-id)
   (funcall *gpu-module-lookup-fun* module-id))
+
+(def function get-module-instance-items (module-id)
+  (gpu-module-instance-item-vector
+   (funcall *gpu-module-lookup-fun* module-id)))
 
 (def generic gpu-global-value (obj)
   (:documentation "Retrieve the value of a GPU global"))

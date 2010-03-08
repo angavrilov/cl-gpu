@@ -26,7 +26,7 @@
               (list :in it))
             (getf options :mode))))
 
-(def (function e) remove-form-by-name (forms name &key (type 't))
+(def function remove-form-by-name (forms name &key (type 't))
   (check-type name symbol)
   (remove-if (lambda (item)
                (and item
@@ -77,6 +77,31 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
 
 (def macro adjust-parents ((accessor form))
   `(adjust-parents-to (,accessor ,form) ,form))
+
+;;; A helper for externalizable objects
+
+(def function object-slots-excluding (object &rest names)
+  (reduce (lambda (slots name)
+            (delete name slots))
+          names
+          :initial-value (mapcar #'closer-mop:slot-definition-name
+                                 (closer-mop:class-slots (class-of object)))))
+
+(def class save-slots-mixin ()
+  ())
+
+(defparameter *excluded-save-slots* nil)
+
+(def method make-load-form ((object save-slots-mixin) &optional env)
+  (if *excluded-save-slots*
+      (make-load-form-saving-slots
+       object :environment env
+       :slot-names (apply #'object-slots-excluding object *excluded-save-slots*))
+      (make-load-form-saving-slots object :environment env)))
+
+(def macro with-exclude-save-slots (slots &body code)
+  `(let ((*excluded-save-slots* (append ',slots *excluded-save-slots*)))
+     ,@code))
 
 ;;; Temporary files
 

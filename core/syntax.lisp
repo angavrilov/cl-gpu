@@ -130,3 +130,44 @@
                      :globals (nreverse var-list)
                      :functions nil
                      :kernels (nreverse kernel-list)))))
+
+(def (definer e :available-flags "e") gpu-module (name &body spec)
+  (bind ((prefix (concatenate 'string (string name) "-"))
+         (keys-sym (gensym "KEYS"))
+         (fspec (loop for item in spec
+                   when (eq (first item) :conc-name)
+                   do (setf prefix (second item))
+                   else collect item))
+         (module (parse-gpu-module-spec fspec :name name
+                                        :environment -environment-)))
+    (compile-gpu-module module)
+    (flet ((make-item-getter (obj)
+             `(svref (gpu-module-instance-item-vector
+                      (get-module-instance ',(name-of module)))
+                     ,(index-of obj))))
+      (bind (((:values field-defs field-names)
+              (loop for var in (globals-of module)
+                 for name = (symbolicate prefix (name-of var))
+                 collect name into names
+                 collect `(define-symbol-macro ,name
+                              (gpu-global-value ,(make-item-getter var)))
+                 into defs
+                 finally (return (values defs names))))
+             ((:values kernel-defs kernel-names)
+              (loop for knl in (kernels-of module)
+                 for name = (symbolicate prefix (name-of knl))
+                 for args = (arguments-of knl)
+                 for rqargs = (mapcar #'name-of (remove-if-not #'required-argument? args))
+                 collect name into names
+                 collect `(defun ,name (,@rqargs &rest ,keys-sym)
+                            (apply ,(make-item-getter knl) ,@rqargs ,keys-sym))
+                 into defs
+                 finally (return (values defs names)))))
+        `(progn
+           (finalize-gpu-module ,module)
+           ,@(when (getf -options- :export)
+                   `((export ',(append (list (name-of module)) field-names kernel-names))))
+           (declaim (inline ,@kernel-names))
+           ,@field-defs
+           ,@kernel-defs
+           ',name)))))
