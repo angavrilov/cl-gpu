@@ -100,6 +100,8 @@
             (error "Invalid gpu module spec item: ~S" item))
           (ecase (first item)
             ((:name)
+             (when name
+               (error "Name is already specified for gpu module ~S" name))
              (setf name (second item)))
             ((:variable :global)
              (destructuring-bind (name type) (rest item)
@@ -131,7 +133,8 @@
                      :functions nil
                      :kernels (nreverse kernel-list)))))
 
-(def (definer e :available-flags "e") gpu-module (name &body spec)
+(def (definer e :available-flags "eas") gpu-module (name &body spec)
+  "Defines a new global GPU code module."
   (bind ((prefix (concatenate 'string (string name) "-"))
          (keys-sym (gensym "KEYS"))
          (fspec (loop for item in spec
@@ -165,9 +168,57 @@
                  finally (return (values defs names)))))
         `(progn
            (finalize-gpu-module ,module)
+           (define-symbol-macro ,name ,module)
            ,@(when (getf -options- :export)
-                   `((export ',(append (list (name-of module)) field-names kernel-names))))
+                   `((export '(,(name-of module)))))
+           ,@(when (getf -options- :export-accessor-names)
+                   `((export ',(append field-names kernel-names))))
+           ,@(when (getf -options- :export-slot-names)
+                   `((export ',(mapcar #'name-of (append (globals-of module)
+                                                         (kernels-of module))))))
            (declaim (inline ,@kernel-names))
            ,@field-defs
            ,@kernel-defs
            ',name)))))
+
+(def (macro e) with-gpu-module (name-or-spec &body code &environment env)
+  "Makes variables and kernels of the module accessible in the lexical scope."
+  (bind (((:values module own-module?)
+          (atypecase (if (symbolp name-or-spec)
+                         ;; This is done to avoid the necessity to
+                         ;; finalize global modules at compilation.
+                         ;; The module object is passed through a
+                         ;; global symbol macro instead.
+                         (macroexpand name-or-spec env)
+                         name-or-spec)
+            ;; Module object
+            (gpu-module it)
+            ;; Just in case, look up symbols dynamically
+            (symbol (or (find-gpu-module it)
+                        (error "Unknown GPU module: ~S" it)))
+            ;; An ad-hoc module specification: parse it
+            (cons
+             (values (parse-gpu-module-spec it :environment env) t))
+            ;; Junk
+            (t
+             (error "Invalid GPU module: ~S" name-or-spec)))))
+    (when own-module?
+      (compile-gpu-module module))
+    (with-unique-names (gpu-instance gpu-items)
+      (bind ((field-defs
+              (loop for var in (globals-of module)
+                 collect `(,(name-of var)
+                            (gpu-global-value (svref ,gpu-items ,(index-of var))))))
+             (kernel-defs
+              (loop for knl in (kernels-of module)
+                 collect `(,(name-of knl) (&rest args)
+                            (apply (svref ,gpu-items ,(index-of knl)) args)))))
+        `(let* ((,gpu-instance (get-module-instance
+                                ,(if own-module?
+                                     `(load-time-value (gpu-module-key (finalize-gpu-module ,module)))
+                                     `(quote ,(name-of module)))))
+                (,gpu-items (gpu-module-instance-item-vector ,gpu-instance)))
+           (symbol-macrolet ,field-defs
+             (flet ,kernel-defs
+               (declare (inline ,@(mapcar #'name-of (kernels-of module))))
+               ,@code)))))))

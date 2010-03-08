@@ -314,6 +314,9 @@
 (declaim (inline get-module-instance get-module-instance-items)
          (ftype (function (t) simple-vector) get-module-instance-item))
 
+(def function gpu-module-key (module)
+  (or (name-of module) module))
+
 (def function get-module-instance (module-id)
   (funcall *gpu-module-lookup-fun* module-id))
 
