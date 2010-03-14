@@ -200,17 +200,20 @@
 
 ;;; AND & OR - parse them as ordinary function calls
 
-(def (walker :in gpu-target) or
-  (with-form-object (appl 'free-application-form -parent-
-                          :operator 'or)
-    (setf (arguments-of appl)
-          (mapcar (lambda (f) (recurse f appl)) (rest -form-)))))
+(def (macro e) unevaluated (expr)
+  "May be used as an init expression to specify type without actually evaluating."
+  (declare (ignore expr))
+  nil)
 
-(def (walker :in gpu-target) and
-  (with-form-object (appl 'free-application-form -parent-
-                          :operator 'and)
-    (setf (arguments-of appl)
-          (mapcar (lambda (f) (recurse f appl)) (rest -form-)))))
+(macrolet ((walk-as-call (name)
+             `(def (walker :in gpu-target) ,name
+                (with-form-object (appl 'free-application-form -parent-
+                                        :operator ',name)
+                  (setf (arguments-of appl)
+                        (mapcar (lambda (f) (recurse f appl)) (rest -form-)))))))
+  (walk-as-call or)
+  (walk-as-call and)
+  (walk-as-call unevaluated))
 
 ;;; Macros
 
@@ -235,11 +238,12 @@
       (setf env (nth (1+ it) args)
             args (append (subseq args 0 it)
                          (subseq args (+ it 2)))))
-    `(defmethod expand-gpu-macro ((,vname (eql ',name)) ,whole ,env)
-       (declare (ignore ,vname)
-                (ignorable ,env))
-       (destructuring-bind ,args (cdr ,whole)
-         ,@code))))
+    `(eval-when (:compile-toplevel :load-toplevel :execute)
+       (defmethod expand-gpu-macro ((,vname (eql ',name)) ,whole ,env)
+         (declare (ignore ,vname)
+                  (ignorable ,env))
+         (destructuring-bind ,args (cdr ,whole)
+           ,@code)))))
 
 ;;; Optimize decls
 
@@ -309,6 +313,12 @@
   (aprog1 (ensure-constant obj)
     (unless (typep it 'integer)
       (error "Must be an integer constant: ~S" it))))
+
+(def function unwrap-keyword-const (val)
+  (if (and (typep val 'constant-form)
+           (keywordp (value-of val)))
+      (value-of val)
+      val))
 
 (def function constant-number-value (form)
   (and (typep form 'constant-form)

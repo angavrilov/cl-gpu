@@ -519,6 +519,26 @@
             (get-local-var-decl-type pdecls (name-of form)))
            (init-form (initial-value-of form))
            (init-type (or values-init-type
+                          (when (typep init-form 'free-application-form)
+                            (case (operator-of init-form)
+                              (unevaluated
+                               (prog1
+                                   (propagate-c-types (first (arguments-of init-form))
+                                                      :upper-type decl-type)
+                                 (setf (initial-value-of form) nil)))
+                              (make-array
+                               (destructuring-bind (dims &key element-type)
+                                   (mapcar #'unwrap-keyword-const (arguments-of init-form))
+                                 (let* ((etype (if element-type (ensure-constant element-type) 'single-float))
+                                        (dtype `(array ,etype ,(ensure-list (ensure-constant dims)))))
+                                   (if lisp-decl-type
+                                       (unless (equal lisp-decl-type dtype)
+                                         (error "~A does not agree with declaration ~A"
+                                                (unwalk-form init-form) lisp-decl-type))
+                                       (setf lisp-decl-type dtype))
+                                   (setf (initial-value-of form) nil
+                                         init-form nil)
+                                   (parse-local-type dtype))))))
                           (propagate-c-types init-form :upper-type decl-type))))
       (cond ((null decl-type)
              (setf decl-type init-type))
