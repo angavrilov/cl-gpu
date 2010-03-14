@@ -20,6 +20,10 @@
 (deftype int32 () '(signed-byte 32))
 (deftype int64 () '(signed-byte 64))
 
+(def (type e) tuple (item &optional size)
+  (check-type size (or null unsigned-byte))
+  `(simple-array ,item (,size)))
+
 (def macro gethash-with-init (key table init-expr)
   "Looks up the key in the table. When not found, lazily initializes with init-expr."
   (with-unique-names (item found)

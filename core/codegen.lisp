@@ -386,6 +386,17 @@
            (unless inside-block?
              (princ ")" stream)))))
 
+  (:method ((form multiple-value-setq-form) stream &key merged-index merged-node inside-block?)
+    (cond (merged-index
+           (assert (is-merged-assignment? form))
+           (awhen (and (>= merged-index 0)
+                       (nth merged-index (variables-of form)))
+             (emit-assignment-code stream it merged-node)))
+          ((is-merged-assignment? form)
+           (emit-c-code (value-of form) stream))
+          (t
+           (call-next-method))))
+
   ;; Variable
   (:method ((form walked-lexical-variable-reference-form) stream &key)
     (let ((gpu-var (ensure-gpu-var form)))

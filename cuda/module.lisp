@@ -41,6 +41,26 @@
     (:uint64 "unsigned long long")
     (otherwise (call-next-method))))
 
+(def layered-method c-type-string :in cuda-target ((type cons))
+  (case (first type)
+    (:tuple (let ((size (second type))
+                  (base (third type)))
+              (unless (and (> size 0)
+                           (<= size (case base
+                                      ((:double :int64) 2)
+                                      (t 4))))
+                (error "Invalid size ~A for tuple of ~A" size base))
+              (format nil "~A~A"
+                      (case base
+                        (:int8 "char") (:uint8 "uchar")
+                        (:int16 "short") (:uint16 "ushort")
+                        (:int32 "int") (:uint32 "uint")
+                        (:int64 "longlong")
+                        (:float "float") (:double "double")
+                        (t (error "Invalid tuple type ~A" base)))
+                      size)))
+    (otherwise (call-next-method))))
+
 (def layered-method c-type-size :in cuda-target (type)
   (case type
     (:pointer +cuda-ptr-size+)
@@ -50,6 +70,22 @@
   (case type
     (:pointer +cuda-ptr-size+)
     (otherwise (call-next-method))))
+
+(def (c-code-emitter :in cuda-target) tuple (&rest args)
+  (emit "make_~A" (c-type-string (form-c-type-of -form-)))
+  (emit-separated -stream- args ","))
+
+(def (c-code-emitter :in cuda-target) untuple (tuple)
+  (if (has-merged-assignment? -form-)
+      (with-c-code-block (-stream-)
+        (let ((tuple/type (form-c-type-of tuple)))
+          (code (c-type-string tuple/type) " TMP = " tuple ";" #\Newline)
+          (loop for i from 0 below (second tuple/type)
+             and name in '("x" "y" "z" "w")
+             when (emit-merged-assignment -stream- -form- i
+                                          (format nil "TMP.~A" name))
+             do (code ";"))))
+      (code tuple ".x")))
 
 (def layered-method emit-abort-command :in cuda-target (stream exception args)
   (declare (ignore exception args))

@@ -62,9 +62,14 @@
 (def function parse-local-type (type-spec)
   (if (unknown-type? type-spec)
       nil
-      (multiple-value-bind (item dims)
-          (parse-global-type type-spec)
-        (if dims `(:pointer ,item) item))))
+      (cond ((and (consp type-spec)
+                  (eq (car type-spec) 'tuple))
+             `(:tuple ,(third type-spec)
+                      ,(parse-atomic-type (second type-spec))))
+            (t
+             (multiple-value-bind (item dims)
+                 (parse-global-type type-spec)
+               (if dims `(:pointer ,item) item))))))
 
 (def function get-local-var-decl-type (pdecls name)
   (aif (find-form-by-name name pdecls :type 'type-declaration-form)
@@ -98,7 +103,9 @@
   (:documentation "Return the size of the type in bytes")
   (:method ((type cons))
     (ecase (first type)
-      (:pointer (c-type-size :pointer))))
+      (:pointer (c-type-size :pointer))
+      (:tuple (* (second type)
+                 (c-type-size (third type))))))
   (:method (type)
     (ecase type
       (:boolean 4)
@@ -115,7 +122,9 @@
   (:documentation "Return the alignment requirement of the type in bytes")
   (:method ((type cons))
     (ecase (first type)
-      (:pointer (c-type-alignment :pointer))))
+      (:pointer (c-type-alignment :pointer))
+      (:tuple (* (extract-power-of-two (second type))
+                 (c-type-alignment (third type))))))
   (:method (type)
     (ecase type
       (:boolean 4)
@@ -278,8 +287,7 @@
 (def function make-local-var (name type-spec &key from-c-type? (c-name (make-local-c-name name)))
   (multiple-value-bind (item-type dims)
       (if from-c-type?
-          (aprog1 type-spec
-            (check-type it keyword))
+          type-spec
           (parse-global-type type-spec))
     (when (and dims (not (every #'numberp dims)))
       (error "Local arrays must have fixed dimensions: ~S" type-spec))
@@ -578,6 +586,11 @@
 
 ;;; Call & assignment definers
 
+(def macro with-type-arg-walker-lexicals (&body code)
+  `(macrolet ((recurse (form &key upper-type)
+                `(propagate-c-types ,form :upper-type ,upper-type)))
+     ,@code))
+
 (def definer type-arg-walker (name args &body code)
   (make-builtin-handler-method
    ;; Builtin prototype + method name
@@ -586,8 +599,7 @@
    code
    :method-args `(&key ((:upper-type -upper-type-)))
    :top-decls `((ignorable -upper-type-))
-   :prefix `(macrolet ((recurse (form &key upper-type)
-                         `(propagate-c-types ,form :upper-type ,upper-type))))))
+   :prefix `(with-type-arg-walker-lexicals)))
 
 (def definer type-computer (name args &body code)
   (make-builtin-handler-method

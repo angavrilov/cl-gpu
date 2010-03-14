@@ -25,6 +25,10 @@
      do (setf prod (* prod (array-dimension arr i)))
      finally (return prod)))
 
+(def (function ei) array-raw-index (arr &rest indexes)
+  "Returns the raw index of a pitched array."
+  (apply #'array-row-major-index arr indexes))
+
 (def (function ei) raw-aref (arr index)
   "Access a pitched array with a raw index."
   (row-major-aref arr index))
@@ -32,6 +36,45 @@
 (def (function ei) (setf raw-aref) (value arr index)
   "Access a pitched array with a raw index."
   (setf (row-major-aref arr index) value))
+
+;; Tuples
+
+(def (function ei) untuple (tuple)
+  (check-type tuple vector)
+  (values-list (coerce tuple 'list)))
+
+(def (function ei) tuple (&rest items)
+  (coerce items 'vector))
+
+(def (function e) tuple-aref (arr &rest indexes)
+  "Access the innermost dimension of an array as a tuple."
+  (bind ((size (array-dimension arr (length indexes)))
+         (index (apply #'array-row-major-index arr (append indexes '(0))))
+         (rv (make-array size :element-type (array-element-type arr))))
+    (loop for i from 0 below size
+       do (setf (row-major-aref rv i) (row-major-aref arr (+ i index))))
+    rv))
+
+(def (function e) (setf tuple-aref) (value arr &rest indexes)
+  "Update the innermost dimension of an array as a tuple."
+  (bind ((size (array-total-size value))
+         (index (apply #'array-row-major-index arr (append indexes '(0)))))
+    (loop for i from 0 below size
+       do (setf (row-major-aref arr (+ i index)) (row-major-aref value i)))
+    value))
+
+(def (function e) tuple-raw-aref (arr index size)
+  "Access consecutive items of an array as a tuple."
+  (bind ((rv (make-array size :element-type (array-element-type arr))))
+    (loop for i from 0 below size
+       do (setf (row-major-aref rv i) (row-major-aref arr (+ i index))))
+    rv))
+
+(def (function e) (setf tuple-raw-aref) (value arr index size)
+  "Update consecutive items of an array as a tuple."
+  (loop for i from 0 below size
+     do (setf (row-major-aref arr (+ i index)) (row-major-aref value i)))
+  value)
 
 ;; Misc
 
@@ -42,60 +85,54 @@
 
 ;;; AREF
 
-(def type-computer aref (arr &rest indexes)
-  (verify-array-var arr)
-  (unless (= (length (dimension-mask-of (ensure-gpu-var arr)))
-             (length indexes))
-    (error "Incorrect array index count in ~S" (unwalk-form -form-)))
-  (loop for idx in indexes
-     do (verify-cast idx :uint32 -form- :prefix "index "
-                     :allow '(:int32) :error-on-warn? t))
-  (second arr/type))
+(def function walk-aref-type-core (form arr indexes &key (value nil v-p)
+                                        (item-type-fun #'second) (index-bias 0)
+                                        access-prefix-fun)
+  (declare (ignore access-prefix-fun))
+  (with-type-arg-walker-lexicals
+    (let* ((arr/type (recurse arr))
+           (item-type (funcall item-type-fun arr/type)))
+      (verify-array-var arr)
+      (unless (= (length (dimension-mask-of (ensure-gpu-var arr)))
+                 (+ (length indexes) index-bias))
+        (error "Incorrect array index count in ~S" (unwalk-form form)))
+      (dolist (idx indexes)
+        (recurse idx :upper-type :uint32))
+      (when v-p
+        (recurse value :upper-type item-type)))))
 
-(def side-effects aref (arr &rest indexes)
-  (make-side-effects :reads (list (ensure-gpu-var arr))))
+(def function type-aref-core (form arr indexes &key (value nil v-p)
+                                   (item-type-fun #'second) (index-bias 0)
+                                   access-prefix-fun)
+  (declare (ignore index-bias access-prefix-fun))
+  (let* ((arr/type (form-c-type-of arr))
+         (item-type (funcall item-type-fun arr/type)))
+    (loop for idx in indexes
+       do (verify-cast idx :uint32 form :prefix "index "
+                       :allow '(:int32) :error-on-warn? t))
+    (when v-p
+      (verify-cast value item-type form))
+    item-type))
 
-(def type-arg-walker (setf aref) (arr &rest indexes)
-  (let ((arr/type (recurse arr)))
-    (verify-array-var arr)
-    (unless (= (length (dimension-mask-of (ensure-gpu-var arr)))
-               (length indexes))
-      (error "Incorrect array index count in ~S" (unwalk-form -form-)))
-    (dolist (idx indexes)
-      (recurse idx :upper-type :uint32))
-    (recurse -value- :upper-type (second arr/type))))
-
-(def type-computer (setf aref) (arr &rest indexes)
-  (loop for idx in indexes
-     do (verify-cast idx :uint32 -form- :prefix "index "
-                     :allow '(:int32) :error-on-warn? t))
-  (verify-cast -value/type- (second arr/type) -form-)
-  (if (eq -upper-type- :void) :void (second arr/type)))
-
-(def side-effects (setf aref) (arr &rest indexes)
-  (make-side-effects :writes (list (ensure-gpu-var arr))))
-
-(def function emit-aref-expr (stream gpu-var rank indexes)
-  (format stream "~A[" (generate-var-ref gpu-var))
+(def function emit-aref-expr (stream prefix base-fun gpu-var rank indexes)
+  (format stream "(~A(~A" prefix (funcall base-fun gpu-var))
   (loop for i from 0 and idx in indexes
-     when (> i 0) do
-     (princ "+" stream)
+     do (princ "+" stream)
      do (emit-c-code idx stream)
      when (< i (1- rank)) do
      (format stream "*~A" (generate-array-stride gpu-var i)))
-  (princ "]" stream))
+  (princ "))" stream))
 
-(def is-statement? aref (arr &rest indexes)
-  (is-optimize-level? 'safety 1))
-
-(def is-statement? (setf aref) (arr &rest indexes)
-  (is-optimize-level? 'safety 1))
-
-(def function emit-aref-core (form var indexes stream &optional value)
+(def function emit-aref-core (form var indexes stream &key value
+                                   (item-type-fun #'second) (index-bias 0)
+                                   (access-prefix-fun (constantly "*"))
+                                   (access-base-fun #'generate-var-ref))
+  (declare (ignore item-type-fun))
   (with-c-code-emitter-lexicals (stream)
     (let* ((gpu-var (ensure-gpu-var var))
-           (rank (length (dimension-mask-of gpu-var))))
-      (assert (= (length indexes) rank))
+           (rank (length (dimension-mask-of gpu-var)))
+           (prefix (funcall access-prefix-fun form)))
+      (assert (= (+ (length indexes) index-bias) rank))
       (if (is-optimize-level? 'safety 1)
           ;; With bound checks
           (with-c-code-block (stream)
@@ -113,11 +150,13 @@
                    (code "if ")
                    (emit-separated stream checks " || ")
                    (code " ")
-                   (emit-abort-command stream "Bad AREF index ~#@{~A ~} for dims ~#@{~A ~} of ~S"
-                                       (append (list i) idxinfos (list i) diminfos (list (name-of var))))
+                   (emit-abort-command stream "Bad ~A index ~#@{~A ~} for dims ~#@{~A ~} of ~S"
+                                       (append (list (operator-of form) i) idxinfos
+                                               (list i) diminfos (list (name-of var))))
                    (force-emit-merged-assignment stream form 0
                                                  (with-output-to-string (sv)
-                                                   (emit-aref-expr sv gpu-var rank idxs)))
+                                                   (emit-aref-expr sv prefix access-base-fun
+                                                                   gpu-var rank idxs)))
                    (when value
                      (code " = " value))
                    (code ";"))))
@@ -125,62 +164,84 @@
           (progn
             (when value
               (code "("))
-            (emit-aref-expr stream gpu-var rank indexes)
+            (emit-aref-expr stream prefix access-base-fun
+                            gpu-var rank indexes)
             (when value
               (code " = " value ")")))))))
 
-(def c-code-emitter aref (var &rest indexes)
-  (emit-aref-core -form- var indexes -stream-))
+(def definer aref-like-builtin (name &rest flags)
+  `(progn
+     (def type-arg-walker ,name (arr &rest indexes)
+       (walk-aref-type-core -form- arr indexes ,@flags))
+     (def type-computer ,name (arr &rest indexes)
+       (type-aref-core -form- arr indexes ,@flags))
+     (def side-effects ,name (arr &rest indexes)
+       (make-side-effects :reads (list (ensure-gpu-var arr))))
+     (def is-statement? ,name (arr &rest indexes)
+       (is-optimize-level? 'safety 1))
+     (def c-code-emitter ,name (arr &rest indexes)
+       (emit-aref-core -form- arr indexes -stream- ,@flags))
+     (def type-arg-walker (setf ,name) (arr &rest indexes)
+       (walk-aref-type-core -form- arr indexes :value -value- ,@flags))
+     (def type-computer (setf ,name) (arr &rest indexes)
+       (type-aref-core -form- arr indexes :value -value- ,@flags))
+     (def side-effects (setf ,name) (arr &rest indexes)
+       (make-side-effects :writes (list (ensure-gpu-var arr))))
+     (def is-statement? (setf ,name) (arr &rest indexes)
+       (is-optimize-level? 'safety 1))
+     (def c-code-emitter (setf ,name) (arr &rest indexes)
+       (emit-aref-core -form- arr indexes -stream- :value -value- ,@flags))))
 
-(def c-code-emitter (setf aref) (var &rest indexes)
-  (emit-aref-core -form- var indexes -stream- -value-))
+(def aref-like-builtin aref)
 
 ;;; RAW-AREF
 
-(def type-computer raw-aref (arr index)
-  (verify-array-var arr)
-  (verify-cast index :uint32 -form- :prefix "index "
-               :allow '(:int32) :error-on-warn? t)
-  (second arr/type))
+(def function walk-raw-aref-type-core (form arr index &key (value nil v-p)
+                                            item-type-fun
+                                            access-prefix-fun access-range-fun)
+  (declare (ignore form item-type-fun access-prefix-fun access-range-fun))
+  (with-type-arg-walker-lexicals
+    (let ((arr/type (recurse arr)))
+      (verify-array-var arr)
+      (recurse index :upper-type :uint32)
+      (when v-p
+        (recurse value :upper-type (second arr/type))))))
 
-(def side-effects raw-aref (arr index)
-  (make-side-effects :reads (list (ensure-gpu-var arr))))
+(def function type-raw-aref-core (form arr index &key (value nil v-p)
+                                       (item-type-fun #'second)
+                                       access-range-fun access-prefix-fun)
+  (declare (ignore access-prefix-fun access-range-fun))
+  (let* ((arr/type (form-c-type-of arr))
+         (item-type (funcall item-type-fun arr/type)))
+    (verify-cast index :uint32 form :prefix "index "
+                 :allow '(:int32) :error-on-warn? t)
+    (when v-p
+      (verify-cast (form-c-type-of value) item-type form))
+    item-type))
 
-(def type-arg-walker (setf raw-aref) (arr index)
-  (let ((arr/type (recurse arr)))
-    (verify-array-var arr)
-    (recurse index :upper-type :uint32)
-    (recurse -value- :upper-type (second arr/type))))
-
-(def type-computer (setf raw-aref) (arr index)
-  (verify-cast index :uint32 -form- :prefix "index "
-               :allow '(:int32) :error-on-warn? t)
-  (verify-cast -value/type- (second arr/type) -form-)
-  (if (eq -upper-type- :void) :void (second arr/type)))
-
-(def side-effects (setf raw-aref) (arr index)
-  (make-side-effects :writes (list (ensure-gpu-var arr))))
-
-(def is-statement? raw-aref (arr index)
-  (is-optimize-level? 'safety 1))
-
-(def is-statement? (setf raw-aref) (arr index)
-  (is-optimize-level? 'safety 1))
-
-(def function emit-raw-aref-core (form var index stream &optional value)
+(def function emit-raw-aref-core (form var index stream &key value
+                                       item-type-fun
+                                       (access-range-fun (constantly 1))
+                                       (access-prefix-fun (constantly "*")))
+  (declare (ignore item-type-fun))
   (with-c-code-emitter-lexicals (stream)
     (let* ((gpu-var (ensure-gpu-var var))
-           (refname (generate-var-ref gpu-var)))
+           (refname (generate-var-ref gpu-var))
+           (prefix (funcall access-prefix-fun form))
+           (access-range (funcall access-range-fun form)))
       (if (is-optimize-level? 'safety 1)
           ;; With bound checks
           (with-c-code-block (stream)
             (code "unsigned IDX = " index ";" #\Newline
                   "unsigned EXT = " (generate-array-extent gpu-var) ";" #\Newline
-                  "if (IDX >= EXT) ")
-            (emit-abort-command stream "Bad RAW-AREF index ~A (extent ~A of ~S)"
-                                (list '(:uint32 "IDX") '(:uint32 "EXT") (name-of var)))
+                  "if (IDX >= EXT")
+            (when (> access-range 1)
+              (code "||(IDX+" (1- access-range) ")>=EXT"))
+            (code ") ")
+            (emit-abort-command stream "Bad ~A index ~A (extent ~A of ~S)"
+                                (list (operator-of form) '(:uint32 "IDX") '(:uint32 "EXT") (name-of var)))
             (force-emit-merged-assignment stream form 0
-                                          (format nil "~A[IDX]" refname))
+                                          (format nil "(~A(~A+IDX))" prefix refname))
             (when value
               (code " = " value))
             (code ";"))
@@ -188,15 +249,34 @@
           (progn
             (when value
               (code "("))
-            (code refname "[" index "]")
+            (code "(" prefix "(" refname "+" index "))")
             (when value
               (code " = " value ")")))))))
 
-(def c-code-emitter raw-aref (var index)
-  (emit-raw-aref-core -form- var index -stream-))
+(def definer raw-aref-like-builtin (name xargs &rest flags)
+  `(progn
+     (def type-arg-walker ,name (arr indexes ,@xargs)
+       (walk-raw-aref-type-core -form- arr indexes ,@flags))
+     (def type-computer ,name (arr indexes ,@xargs)
+       (type-raw-aref-core -form- arr indexes ,@flags))
+     (def side-effects ,name (arr indexes ,@xargs)
+       (make-side-effects :reads (list (ensure-gpu-var arr))))
+     (def is-statement? ,name (arr indexes ,@xargs)
+       (is-optimize-level? 'safety 1))
+     (def c-code-emitter ,name (arr indexes ,@xargs)
+       (emit-raw-aref-core -form- arr indexes -stream- ,@flags))
+     (def type-arg-walker (setf ,name) (arr indexes ,@xargs)
+       (walk-raw-aref-type-core -form- arr indexes :value -value- ,@flags))
+     (def type-computer (setf ,name) (arr indexes ,@xargs)
+       (type-raw-aref-core -form- arr indexes :value -value- ,@flags))
+     (def side-effects (setf ,name) (arr indexes ,@xargs)
+       (make-side-effects :writes (list (ensure-gpu-var arr))))
+     (def is-statement? (setf ,name) (arr indexes ,@xargs)
+       (is-optimize-level? 'safety 1))
+     (def c-code-emitter (setf ,name) (arr indexes ,@xargs)
+       (emit-raw-aref-core -form- arr indexes -stream- :value -value- ,@flags))))
 
-(def c-code-emitter (setf raw-aref) (var index)
-  (emit-raw-aref-core -form- var index -stream- -value-))
+(def raw-aref-like-builtin raw-aref ())
 
 ;;; Misc array properties
 
@@ -239,6 +319,75 @@
 (def c-code-emitter array-raw-stride (var dimidx)
   (emit "~A" (generate-array-stride (ensure-gpu-var var)
                                     (ensure-constant dimidx))))
+
+(def type-arg-walker array-raw-index (arr &rest indexes)
+  (walk-aref-type-core -form- arr indexes))
+
+(def type-computer array-raw-index (arr &rest indexes)
+  (type-aref-core -form- arr indexes)
+  :uint32)
+
+(def is-statement? array-raw-index (arr &rest indexes)
+  (is-optimize-level? 'safety 1))
+
+(def c-code-emitter array-raw-index (arr &rest indexes)
+  (emit-aref-core -form- arr indexes -stream-
+                  :access-prefix-fun (constantly "")
+                  :access-base-fun (constantly "")))
+
+;;; Tuples
+
+(def function ensure-scalar-result (args-or-types form &key prefix)
+  (ensure-common-type args-or-types form :prefix prefix
+                      :types '(:int8 :uint8 :int16 :uint16 :int32 :uint32
+                               :int64 :uint64 :float :double)))
+
+(def type-computer tuple (&rest items)
+  (let ((rtype (ensure-scalar-result items -form-)))
+    `(:tuple ,(length items) ,rtype)))
+
+(def type-computer untuple (tuple)
+  (unless (and (consp tuple/type)
+               (eq (first tuple/type) :tuple))
+    (error "Must be a tuple expression: ~A" (unwalk-form tuple)))
+  (let ((size (min (second tuple/type)
+                   (length (unwrap-values-type -upper-type-))))
+        (base (third tuple/type)))
+    (wrap-values-type (loop for i from 0 below size collect base))))
+
+(def is-statement? untuple (tuple)
+  (values-c-type? (form-c-type-of -form-)))
+
+;; code generators are target-specific
+
+(def function tuple-aref-rv-type (arr type)
+  (let* ((gpu-var (ensure-gpu-var arr))
+         (dims (dimension-mask-of gpu-var))
+         (size (aref dims (1- (length dims)))))
+    (unless (integerp size)
+      (error "The array must have a constant last dimension: ~A"
+             (unwalk-form arr)))
+    `(:tuple ,size ,(second type))))
+
+(def function tuple-aref-cprefix (form)
+  (format nil "*(~A*)" (c-type-string (form-c-type-of form))))
+
+(def aref-like-builtin tuple-aref
+  :index-bias 1
+  :item-type-fun (curry #'tuple-aref-rv-type arr)
+  :access-prefix-fun #'tuple-aref-cprefix)
+
+(def function tuple-raw-aref-rv-type (size type)
+  (let ((size (ensure-int-constant size)))
+    `(:tuple ,size ,(second type))))
+
+(def function tuple-raw-aref-range (form)
+  (second (form-c-type-of form)))
+
+(def raw-aref-like-builtin tuple-raw-aref (count)
+  :item-type-fun (curry #'tuple-raw-aref-rv-type count)
+  :access-prefix-fun #'tuple-aref-cprefix
+  :access-range-fun #'tuple-raw-aref-range)
 
 ;;; Arithmetics
 

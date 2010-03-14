@@ -35,6 +35,13 @@
                     (eq (name-of item) name)))
              forms))
 
+(def function extract-power-of-two (value)
+  "Returns the integer part of base-2 logarithm and the remainder."
+  (loop for i from 0
+     when (or (logtest value 1) (<= value 0))
+     return (values i value)
+     else do (setf value (ash value -1))))
+
 (define-modify-macro remove-form-by-name! (name &rest flags) remove-form-by-name)
 
 (def function make-type-arg (sym)
