@@ -413,7 +413,11 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
 (def function symbol-to-c-name (name)
   "Converts the symbol name to a suitable C identifier."
   (coerce (loop
-             for char across (string-downcase (symbol-name name))
+             with sym-name = (symbol-name name)
+             with name-string = (if (symbol-package name)
+                                    sym-name
+                                    (string-right-trim "0123456789" sym-name))
+             for char across (string-downcase name-string)
              and prev-char = nil then char
              ;; Can't begin with a number
              when (and (digit-char-p char) (null prev-char))
