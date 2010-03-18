@@ -277,7 +277,7 @@
              (setf (initial-value-of (car tail)) nil)
              ;; If there are some more bindings, split
              (when (cdr tail)
-               (with-form-object (inner (class-of form) form
+               (with-form-object (inner 'let*-form form
                                         :bindings (cdr tail)
                                         :body (body-of form))
                  (setf (cdr tail) nil) ; cut the binding list
