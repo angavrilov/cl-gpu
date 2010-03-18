@@ -126,6 +126,7 @@
   (:method ((blk foreign-block))
     (if (foreign-block-ptr blk)
         (progn
+          (cancel-finalization blk)
           (foreign-free (foreign-block-ptr blk))
           (setf (foreign-block-ptr blk) nil))
         (cerror "ignore" "This block has already been deallocated"))))
@@ -154,6 +155,7 @@
            (buffer (make-instance 'foreign-array :blk blk :size size
                                   :elt-type foreign-type :elt-size elt-size
                                   :dims (to-uint32-vector dims))))
+      (finalize blk (lambda () (foreign-free ptr)))
       (values buffer))))
 
 (def method buffer-displace ((buffer foreign-array) &key

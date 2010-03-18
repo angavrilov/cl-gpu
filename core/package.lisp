@@ -14,6 +14,7 @@
         :anaphora
         :contextl
         :bordeaux-threads
+        :trivial-garbage
         :cffi
         :hu.dwim.common-lisp
         :hu.dwim.def

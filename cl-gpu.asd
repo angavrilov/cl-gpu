@@ -17,7 +17,8 @@
   :description "A library for writing GPU kernels in a subset of CL"
   :depends-on (:cffi
                :bordeaux-threads
-               :hu.dwim.walker)
+               :hu.dwim.walker
+               :trivial-garbage)
   :components ((:module "core"
                 :components ((:file "package")
                              (:file "typedefs" :depends-on ("package"))
