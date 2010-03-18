@@ -55,7 +55,8 @@
 (def function canonify-lisp-type (type)
   "Computes a canonic form of a lisp type."
   (with-memoize (type :test #'equal)
-    (or (cond ((subtypep type 'unsigned-byte)
+    (or (cond ((eq type 'fixnum) 'int32) ; a hack to unify 32 & 64-bit
+              ((subtypep type 'unsigned-byte)
                (cond ((subtypep type '(unsigned-byte 8)) 'uint8)
                      ((subtypep type '(unsigned-byte 16)) 'uint16)
                      ((subtypep type '(unsigned-byte 32)) 'uint32)

@@ -39,7 +39,7 @@
   `(make-side-effects :reads (list ,@(side-effects-reads obj))
                       :writes (list ,@(side-effects-writes obj))))
 
-(def form-attribute-accessor side-effects :type side-effects)
+(def form-attribute-accessor side-effects :type (or side-effects null))
 
 ;; A wrapper for global variables
 
