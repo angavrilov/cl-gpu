@@ -210,9 +210,11 @@
   (device nil :read-only t)
   (handle nil)
   (thread nil)
-  (blocks (make-weak-set))
+  (blocks (make-weak-set) :read-only t)
   (modules nil)
-  (module-hash (make-hash-table :test #'eq))
+  (module-hash (make-weak-hash-table :test #'eq :weakness :key
+                                     :weakness-matters nil)
+               :read-only t)
   (reg-count 0)
   (warp-size 0)
   (shared-memory 0)
@@ -252,8 +254,11 @@
   (pitch 0 :type fixnum :read-only t)
   (pitch-elt 0 :type fixnum :read-only t)
   (handle nil)
-  (recover-cb nil)
-  (wipe-cb-list nil))
+  (wipe-cb nil)
+  ;; Reference lists; these must be shared with
+  ;; the copy used by the finalizer.
+  (references (list 'ref-set) :read-only t)
+  (referenced-by (make-weak-set) :read-only t))
 
 (defmethod print-object ((object cuda-context) stream)
   (print-unreadable-object (object stream :identity t)
@@ -527,10 +532,39 @@
         (weak-set-addf (cuda-context-blocks context) blk)
         blk))))
 
-(def function %cuda-linear-call-wipe-cb (blk)
-  (dolist (cb (copy-list (cuda-linear-wipe-cb-list blk)))
+(def function cuda-linear-reference (blk target)
+  (let ((crefs (cuda-linear-references blk))
+        (trefs (cuda-linear-referenced-by target)))
+    (unless (member target (cdr crefs) :test #'eq)
+      (weak-set-addf trefs blk)
+      (push target (cdr crefs))
+      (unless (cuda-linear-module target)
+        (incf (cuda-linear-refcnt target))))))
+
+(def function cuda-linear-unreference (blk target)
+  (let ((crefs (cuda-linear-references blk))
+        (trefs (cuda-linear-referenced-by target)))
+    (when (member target (cdr crefs) :test #'eq)
+      (weak-set-deletef trefs blk)
+      (deletef (cdr crefs) target :test #'eq)
+      (when (and (null (cuda-linear-module target))
+                 (= (decf (cuda-linear-refcnt target)) 0))
+        (deallocate target)))))
+
+(def function %cuda-linear-wipe-references (blk)
+  ;; Wipe blocks that reference this one
+  (dolist (tgt (weak-set-snapshot (cuda-linear-referenced-by blk)))
     (with-simple-restart (continue "Continue invoking wipe callbacks")
-      (funcall cb blk))))
+      (deletef (cdr (cuda-linear-references tgt)) blk :test #'eq)
+      (aif (ensure-weak-pointer-value (cuda-linear-wipe-cb tgt))
+           (funcall it tgt blk)
+           (awhen (cuda-linear-handle tgt)
+             (cuda-invoke cuMemsetD8 it 0 (cuda-linear-extent tgt))
+             (warn "Block deallocated while referenced, reference source wiped.")))))
+  ;; Unreference blocks linked by this one
+  (dolist (tgt (copy-list (cdr (cuda-linear-references blk))))
+    (with-simple-restart (continue "Continue invoking wipe callbacks")
+      (cuda-linear-unreference blk tgt))))
 
 (def function cuda-free-linear (blk)
   (if (cuda-linear-handle blk)
@@ -542,7 +576,8 @@
           (cuda-invoke cuMemFree (cuda-linear-handle blk))
           (setf (cuda-linear-handle blk) nil)
           (weak-set-deletef (cuda-context-blocks context) blk)
-          (%cuda-linear-call-wipe-cb blk)
+          (setf (cuda-linear-wipe-cb blk) nil)
+          (%cuda-linear-wipe-references blk)
           nil))
       (cerror "ignore" "CUDA block already destroyed.")))
 
@@ -604,7 +639,8 @@
 (def function %cuda-module-invalidate (module)
   (setf (cuda-module-handle module) nil)
   (dolist (var (cuda-module-vars module))
-    (setf (cuda-linear-handle (cdr var)) nil))
+    (setf (cuda-linear-handle (cdr var)) nil)
+    (setf (cuda-linear-wipe-cb (cdr var)) nil))
   (dolist (fun (cuda-module-functions module))
     (setf (cuda-function-handle fun) nil)))
 
@@ -616,6 +652,7 @@
                          (pmodule 'cuda-module-handle))
     (let ((context (cuda-current-context))
           (opt-cnt 0))
+      (cuda-context-destroy-queued-items context)
       (flet ((add-option (code type ptr value)
                (setf (mem-ref ptr type) value
                      (mem-aref pvalues :pointer opt-cnt) ptr
@@ -647,9 +684,12 @@
           (%cuda-module-invalidate module)
           (deletef (cuda-context-modules context) module)
           (dolist (var (cuda-module-vars module))
-            (%cuda-linear-call-wipe-cb (cdr var)))
+            (%cuda-linear-wipe-references (cdr var)))
           nil))
       (cerror "ignore" "CUDA module already destroyed.")))
+
+(def method deallocate ((module cuda-module))
+  (cuda-unload-module module))
 
 (def function cuda-module-get-var (module name)
   "Returns a linear block that describes a module-global variable."

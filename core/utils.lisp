@@ -159,6 +159,9 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
 
 ;;; Weak sets
 
+(def function ensure-weak-pointer-value (ptr)
+  (if (weak-pointer-p ptr) (weak-pointer-value ptr) ptr))
+
 (def function make-weak-set (&optional items)
   #+openmcl
   (ccl:make-population :type :list :initial-contents items)

@@ -250,7 +250,7 @@
 ;;; Instance management
 
 (defstruct gpu-module-instance
-  module change-sentinel item-vector)
+  change-sentinel item-vector)
 
 ;; Initial creation
 (def layered-function instantiate-module-item (item instance &key old-value)
@@ -258,8 +258,7 @@
 
 (def function fill-generic-gpu-instance (instance module old-ivals)
   (let ((old-size (if old-ivals (length old-ivals) 0)))
-    (setf (gpu-module-instance-module instance) module
-          (gpu-module-instance-change-sentinel instance) (change-sentinel-of module))
+    (setf (gpu-module-instance-change-sentinel instance) (change-sentinel-of module))
     (let* ((items (append (globals-of module) (kernels-of module)))
            (maxid (reduce #'max items :key #'index-of))
            (ivect (make-array (1+ maxid) :initial-element nil)))

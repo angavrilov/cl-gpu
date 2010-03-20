@@ -194,15 +194,17 @@
          (arg-buf (buffer-displace stub-buf :foreign-type :uint32 :size t)))
     (buffer-fill stub-buf 0)
     (setf (buffer-of -self-) arg-buf)
-    ;; Cache a single instance to allow easy deletef
+    ;; Define a wipe callback
     (setf (wipe-cb-of -self-)
-          (lambda (blk)
-            (when (and (cuda-linear-valid-p (blk-of -self-))
+          (lambda (cur blk)
+            (when (and (cuda-linear-valid-p cur)
                        (value-of -self-)
                        (eq blk (slot-value (value-of -self-) 'blk)))
               (setf (gpu-global-value -self-) nil)
               (warn "Contents of global ~S were deallocated while in use."
-                    (name-of (var-decl-of -self-))))))))
+                    (name-of (var-decl-of -self-))))))
+    (setf (cuda-linear-wipe-cb (blk-of -self-))
+          (make-weak-pointer (wipe-cb-of -self-)))))
 
 (def method gpu-global-value ((obj cuda-dynarray-global))
   (value-of obj))
@@ -234,31 +236,25 @@
         ;; Upload the attribute vector
         (copy-full-buffer dim-buf buffer)))))
 
-(def macro mem-array-wipe-cb-list (buf)
-  `(cuda-linear-wipe-cb-list (slot-value ,buf 'blk)))
-
 (def method (setf gpu-global-value) (value (-self- cuda-dynarray-global))
   (unless (eq value (value-of -self-))
     (if value
         (progn
           (%upload-dynarray-descriptor (buffer-of -self-) (var-decl-of -self-) value)
-          ;; Increase the reference count and register the wipe cb
-          (ref-buffer value)
-          (push (wipe-cb-of -self-) (mem-array-wipe-cb-list value)))
+          ;; Establish the reference (includes increasing the refcnt)
+          (cuda-linear-reference (blk-of -self-) (slot-value value 'blk)))
         (buffer-fill (buffer-of -self-) 0))
     ;; Save the new value and detach the old one
     (let ((old-val (value-of -self-)))
       (setf (value-of -self-) value)
       (when old-val
-        (deletef (mem-array-wipe-cb-list old-val) (wipe-cb-of -self-))
-        (deref-buffer old-val))))
+        (cuda-linear-unreference (blk-of -self-) (slot-value old-val 'blk)))))
   (values value))
 
 (def method freeze-module-item ((-self- cuda-dynarray-global))
-  (value-of -self-))
+  (aif (value-of -self-) (ref-buffer it)))
 
 (def method kill-frozen-object ((item cuda-dynarray-global) (obj cuda-mem-array))
-  (deletef (mem-array-wipe-cb-list obj) (wipe-cb-of item))
   (setf (value-of item) nil)
   (deref-buffer obj))
 
@@ -378,22 +374,29 @@
 
 (def layered-method load-gpu-module-instance :in cuda-target ((module gpu-module))
   (format t "Loading CUDA module ~A~%" (name-of module))
-  (make-cuda-module-instance :handle (cuda-load-module (compiled-code-of module))))
+  (let* ((handle (cuda-load-module (compiled-code-of module)))
+         (module (make-cuda-module-instance :handle handle)))
+    (cuda-context-queue-finalizer (cuda-module-context handle) module handle)
+    module))
 
 (def layered-method upgrade-gpu-module-instance :in cuda-target ((module gpu-module) instance)
   (let ((old-handle (cuda-module-instance-handle instance)))
+    (cancel-finalization module)
     (cuda-unload-module old-handle)
-    (loop
-       (with-simple-restart (retry-load "Retry loading the module")
-         (format t "Reloading CUDA module ~A~%" (name-of module))
-         (setf (cuda-module-instance-handle instance)
-               (cuda-load-module (compiled-code-of module)))
-         (return)))))
+    (let ((new-handle
+           (loop
+              (with-simple-restart (retry-load "Retry loading the module")
+                (format t "Reloading CUDA module ~A~%" (name-of module))
+                (return (cuda-load-module (compiled-code-of module)))))))
+      (setf (cuda-module-instance-handle instance) new-handle)
+      (cuda-context-queue-finalizer (cuda-module-context new-handle) module new-handle))))
 
 (def layered-method upgrade-gpu-module-instance :in cuda-target :around ((module gpu-module) instance)
   ;; Verify the context early
   (with-cuda-context ((cuda-module-context (cuda-module-instance-handle instance)))
     (call-next-method)))
+
+;;; Code compilation
 
 (def layered-method compile-object :in cuda-target ((function gpu-function))
   (unless (and (slot-boundp function 'body)
