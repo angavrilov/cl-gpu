@@ -45,7 +45,7 @@
 (define-modify-macro remove-form-by-name! (name &rest flags) remove-form-by-name)
 
 (def function make-type-arg (sym)
-  (format-symbol (symbol-package sym) "~A/TYPE" sym))
+  (format-symbol t "~A/TYPE" sym))
 
 (def macro make-builtin-handler-method (builtin-name
                                         builtin-args
@@ -156,6 +156,57 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
   #+ecl (ext:system cmd)
   #+ccl (ccl::os-command cmd)
   #-(or ecl ccl) (error "Not implemented"))
+
+;;; Weak sets
+
+(def function make-weak-set (&optional items)
+  #+openmcl
+  (ccl:make-population :type :list :initial-contents items)
+  #-openmcl
+  (list* 'weak-set (mapcar #'make-weak-pointer items)))
+
+(def macro do-weak-ptr-list ((ptr-item wset &optional end) &body code)
+  "Walk a list of weak pointers, automatically pruning the dead ones."
+  (with-unique-names (pos next)
+    `(do* ((,pos ,wset ,next)
+           (,next (cdr ,pos) (cdr ,pos)))
+          ((null ,next) ,end)
+       (declare (type list ,pos ,next))
+       (macrolet ((delete-this-item ()
+                    `(setf (cdr ,',pos) (cdr ,',next)
+                           ,',next ,',pos)))
+         (let ((,ptr-item (weak-pointer-value (car ,next))))
+           (if ,ptr-item
+               (progn ,@code)
+               (delete-this-item)))))))
+
+(def function weak-set-addf (wset new-item)
+  #+openmcl
+  (pushnew new-item (ccl:population-contents wset) :test #'eq)
+  #-openmcl
+  (progn
+    (do-weak-ptr-list (item wset)
+      (when (eq item new-item)
+        (return-from weak-set-addf)))
+    (push (make-weak-pointer new-item) (cdr wset)))
+  (values))
+
+(def function weak-set-deletef (wset rm-item)
+  #+openmcl
+  (deletef (ccl:population-contents wset) rm-item :test #'eq)
+  #-openmcl
+  (do-weak-ptr-list (item wset)
+    (when (eq item rm-item)
+      (delete-this-item)))
+  (values))
+
+(def function weak-set-snapshot (wset)
+  #+openmcl
+  (copy-list (ccl:population-contents wset))
+  #-openmcl
+  (let (rv)
+    (do-weak-ptr-list (item wset rv)
+      (push item rv))))
 
 ;;; Array I/O
 

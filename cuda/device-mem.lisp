@@ -112,7 +112,7 @@
 (def method deref-buffer ((buffer cuda-mem-array))
   (with-slots (blk) buffer
     (unless (> (decf (cuda-linear-refcnt blk)) 0)
-      (cuda-free-linear blk))))
+      (deallocate blk))))
 
 (def method row-major-bref ((buffer cuda-mem-array) index)
   (with-slots (blk log-offset elt-type elt-size) buffer

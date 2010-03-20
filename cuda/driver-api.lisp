@@ -210,12 +210,13 @@
   (device nil :read-only t)
   (handle nil)
   (thread nil)
-  (blocks nil)
+  (blocks (make-weak-set))
   (modules nil)
   (module-hash (make-hash-table :test #'eq))
   (reg-count 0)
   (warp-size 0)
-  (shared-memory 0))
+  (shared-memory 0)
+  (destroy-queue nil))
 
 (defstruct cuda-function
   "CUDA Kernel handle wrapper"
@@ -259,7 +260,8 @@
     (format stream "CUDA Context @~A ~AKb"
             (cuda-context-device object)
             (ceiling (reduce #'+ (mapcar #'cuda-linear-extent
-                                         (cuda-context-blocks object)))
+                                         (weak-set-snapshot
+                                          (cuda-context-blocks object))))
                      1024))
     (unless (cuda-context-handle object)
       (format stream " (DEAD)"))))
@@ -332,11 +334,25 @@
     (deletef *cuda-context-list* context)
     (deletef (gethash (current-thread) *cuda-thread-contexts*) context)
     ;; Wipe the memory handles
-    (dolist (blk (cuda-context-blocks context))
+    (setf (cuda-context-destroy-queue context) nil)
+    (dolist (blk (weak-set-snapshot (cuda-context-blocks context)))
       (setf (cuda-linear-handle blk) nil))
     (dolist (module (cuda-context-modules context))
       (%cuda-module-invalidate module))
     nil))
+
+(def function cuda-context-queue-finalizer (context object queue-item)
+  (assert queue-item)
+  (finalize object
+            (lambda () (with-lock-held (*cuda-context-lock*)
+                    (push queue-item (cuda-context-destroy-queue context))))))
+
+(def function cuda-context-destroy-queued-items (context)
+  (loop for object = (with-lock-held (*cuda-context-lock*)
+                       (pop (cuda-context-destroy-queue context)))
+     while object do
+       (with-simple-restart (continue "Continue destroying queued objects")
+         (deallocate object))))
 
 ;;; Linear memory
 
@@ -488,6 +504,7 @@
   (assert (cuda-valid-context-p (cuda-current-context)))
   (let ((context (cuda-current-context))
         (size (* width height)))
+    (cuda-context-destroy-queued-items context)
     (multiple-value-bind (handle pitch)
         (if (and pitch-for (> height 1))
             (with-foreign-objects ((phandle 'cuda-device-ptr)
@@ -506,7 +523,8 @@
                                    :size size :extent (* height pitch)
                                    :pitch-elt (or pitch-for 0)
                                    :width width :height height :pitch pitch)))
-        (push blk (cuda-context-blocks context))
+        (cuda-context-queue-finalizer context blk (copy-cuda-linear blk))
+        (weak-set-addf (cuda-context-blocks context) blk)
         blk))))
 
 (def function %cuda-linear-call-wipe-cb (blk)
@@ -520,12 +538,16 @@
         (when (cuda-linear-module blk)
           (error "Cannot deallocate blocks that belong to modules."))
         (with-cuda-context (context)
+          (cancel-finalization blk)
           (cuda-invoke cuMemFree (cuda-linear-handle blk))
           (setf (cuda-linear-handle blk) nil)
-          (deletef (cuda-context-blocks context) blk)
+          (weak-set-deletef (cuda-context-blocks context) blk)
           (%cuda-linear-call-wipe-cb blk)
           nil))
       (cerror "ignore" "CUDA block already destroyed.")))
+
+(def method deallocate ((obj cuda-linear))
+  (cuda-free-linear obj))
 
 (def macro with-pitch-mapping-vars ((blk offset size &key (prefix "")) &body code)
   "Non-hygienic macro that defines variables with various pitch parameters."

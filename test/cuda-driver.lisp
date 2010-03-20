@@ -170,3 +170,28 @@
 (def test test/cuda-driver/compute ()
   (with-fixture cuda-context
     (test/translator/compute :cuda)))
+
+(def function cuda-allocate-dummy-block ()
+  (cuda-make-array 10)
+  (values nil nil nil nil nil))
+
+(def function cuda-context-block-cnt (ctx)
+  (length (cl-gpu::weak-set-snapshot (cl-gpu::cuda-context-blocks ctx))))
+
+(def test test/cuda-driver/gc/blocks ()
+  (with-fixture cuda-context
+    (let ((cnt (cuda-context-block-cnt *cuda-ctx*)))
+      (cuda-allocate-dummy-block)
+      (is (= (1+ cnt) (cuda-context-block-cnt *cuda-ctx*)))
+      (is (null (cl-gpu::cuda-context-destroy-queue *cuda-ctx*)))
+      (tg:gc :full t)
+      (tg:gc :full t)
+      (tg:gc :full t)
+      #+openmcl (ccl::drain-termination-queue)
+      (is (= cnt (cuda-context-block-cnt *cuda-ctx*)))
+      (is (typep (car (cl-gpu::cuda-context-destroy-queue *cuda-ctx*))
+                 'cl-gpu::cuda-linear))
+      (with-deref-buffer (buf (cuda-make-array 10))
+        (declare (ignore buf))
+        (is (null (cl-gpu::cuda-context-destroy-queue *cuda-ctx*)))))))
+
