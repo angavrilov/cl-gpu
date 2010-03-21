@@ -245,8 +245,6 @@
   "CUDA linear block wrapper"
   (refcnt 1 :type fixnum)
   (context nil :type cuda-context :read-only t)
-  ;; If the block represents a static variable:
-  (module nil :type (or cuda-module null) :read-only t)
   (size 0 :type fixnum :read-only t)
   (extent 0 :type fixnum :read-only t)
   (width 0 :type fixnum :read-only t)
@@ -259,6 +257,9 @@
   ;; the copy used by the finalizer.
   (references (list 'ref-set) :read-only t)
   (referenced-by (make-weak-set) :read-only t))
+
+(defstruct (cuda-static-blk (:include cuda-linear))
+  (module nil :type cuda-module :read-only t))
 
 (defmethod print-object ((object cuda-context) stream)
   (print-unreadable-object (object stream :identity t)
@@ -492,9 +493,7 @@
   (print-unreadable-object (object stream :identity t)
     (format stream "CUDA Block ~AKb &~A "
             (ceiling (cuda-linear-extent object) 1024)
-            (if (cuda-linear-module object)
-                T
-                (cuda-linear-refcnt object)))
+            (buffer-refcnt object))
     (if (cuda-linear-pitched-p object)
         (format stream "~A+~Ax~A" (cuda-linear-width object)
                 (- (cuda-linear-pitch object) (cuda-linear-width object))
@@ -532,14 +531,27 @@
         (weak-set-addf (cuda-context-blocks context) blk)
         blk))))
 
+(def method buffer-refcnt ((blk cuda-linear))
+  (if (cuda-linear-handle blk)
+      (cuda-linear-refcnt blk)))
+
+(def method buffer-refcnt ((blk cuda-static-blk))
+  (if (cuda-linear-handle blk) t))
+
+(def method ref-buffer ((blk cuda-linear))
+  (incf (cuda-linear-refcnt blk)))
+
+(def method deref-buffer ((blk cuda-linear))
+  (unless (> (decf (cuda-linear-refcnt blk)) 0)
+    (deallocate blk)))
+
 (def function cuda-linear-reference (blk target)
   (let ((crefs (cuda-linear-references blk))
         (trefs (cuda-linear-referenced-by target)))
     (unless (member target (cdr crefs) :test #'eq)
       (weak-set-addf trefs blk)
       (push target (cdr crefs))
-      (unless (cuda-linear-module target)
-        (incf (cuda-linear-refcnt target))))))
+      (ref-buffer target))))
 
 (def function cuda-linear-unreference (blk target)
   (let ((crefs (cuda-linear-references blk))
@@ -547,9 +559,7 @@
     (when (member target (cdr crefs) :test #'eq)
       (weak-set-deletef trefs blk)
       (deletef (cdr crefs) target :test #'eq)
-      (when (and (null (cuda-linear-module target))
-                 (= (decf (cuda-linear-refcnt target)) 0))
-        (deallocate target)))))
+      (deref-buffer target))))
 
 (def function %cuda-linear-wipe-references (blk)
   ;; Wipe blocks that reference this one
@@ -566,11 +576,9 @@
     (with-simple-restart (continue "Continue invoking wipe callbacks")
       (cuda-linear-unreference blk tgt))))
 
-(def function cuda-free-linear (blk)
+(def method deallocate ((blk cuda-linear))
   (if (cuda-linear-handle blk)
       (let ((context (cuda-linear-context blk)))
-        (when (cuda-linear-module blk)
-          (error "Cannot deallocate blocks that belong to modules."))
         (with-cuda-context (context)
           (cancel-finalization blk)
           (cuda-invoke cuMemFree (cuda-linear-handle blk))
@@ -581,8 +589,8 @@
           nil))
       (cerror "ignore" "CUDA block already destroyed.")))
 
-(def method deallocate ((obj cuda-linear))
-  (cuda-free-linear obj))
+(def method deallocate ((obj cuda-static-blk))
+  (error "Cannot deallocate blocks that belong to modules."))
 
 ;;; CUDA Modules
 
@@ -701,10 +709,10 @@
                                  (psize :unsigned-int))
             (cuda-invoke cuModuleGetGlobal paddr psize handle name)
             (let* ((size (mem-ref psize :unsigned-int))
-                   (blk (make-cuda-linear :context *cuda-context* :module module
-                                          :size size :extent size
-                                          :width size :pitch size :height 1
-                                          :handle (mem-ref paddr 'cuda-device-ptr))))
+                   (blk (make-cuda-static-blk :context *cuda-context* :module module
+                                              :size size :extent size
+                                              :width size :pitch size :height 1
+                                              :handle (mem-ref paddr 'cuda-device-ptr))))
               (push (cons name blk) (cuda-module-vars module))
               (values blk)))))))
 

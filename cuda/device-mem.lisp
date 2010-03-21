@@ -96,23 +96,14 @@
                      :dims (to-uint32-vector dimensions)
                      :strides (to-uint32-vector (compute-linear-strides blk dimensions
                                                                         elt-size pitch-level))))))
-
 (def method buffer-refcnt ((buffer cuda-mem-array))
-  (with-slots (blk) buffer
-    (if (cuda-linear-valid-p blk)
-        (if (cuda-linear-module blk)
-            t ; Module-backed blocks cannot be deallocated
-            (cuda-linear-refcnt blk))
-        nil)))
+  (buffer-refcnt (slot-value buffer 'blk)))
 
 (def method ref-buffer ((buffer cuda-mem-array))
-  (with-slots (blk) buffer
-    (incf (cuda-linear-refcnt blk))))
+  (ref-buffer (slot-value buffer 'blk)))
 
 (def method deref-buffer ((buffer cuda-mem-array))
-  (with-slots (blk) buffer
-    (unless (> (decf (cuda-linear-refcnt blk)) 0)
-      (deallocate blk))))
+  (deref-buffer (slot-value buffer 'blk)))
 
 (def method row-major-bref ((buffer cuda-mem-array) index)
   (with-slots (blk log-offset elt-type elt-size) buffer

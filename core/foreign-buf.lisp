@@ -131,6 +131,19 @@
           (setf (foreign-block-ptr blk) nil))
         (cerror "ignore" "This block has already been deallocated"))))
 
+(def method buffer-refcnt ((blk foreign-block))
+  (if (foreign-block-ptr blk)
+      (foreign-block-refcnt blk)
+      nil))
+
+(def method ref-buffer ((blk foreign-block))
+  (incf (foreign-block-refcnt blk)))
+
+(def method deref-buffer ((blk foreign-block))
+  (unless (> (decf (foreign-block-refcnt blk)) 0)
+    (deallocate blk)))
+
+;; The actual buffer:
 
 (def class* foreign-array (abstract-foreign-buffer)
   ((blk :type foreign-block))
@@ -170,19 +183,13 @@
                    :dims (to-uint32-vector dimensions))))
 
 (def method buffer-refcnt ((buffer foreign-array))
-  (with-slots (blk) buffer
-    (if (foreign-block-ptr blk)
-        (foreign-block-refcnt blk)
-        nil)))
+  (buffer-refcnt (slot-value buffer 'blk)))
 
 (def method ref-buffer ((buffer foreign-array))
-  (with-slots (blk) buffer
-    (incf (foreign-block-refcnt blk))))
+  (ref-buffer (slot-value buffer 'blk)))
 
 (def method deref-buffer ((buffer foreign-array))
-  (with-slots (blk) buffer
-    (unless (> (decf (foreign-block-refcnt blk)) 0)
-      (deallocate blk))))
+  (deref-buffer (slot-value buffer 'blk)))
 
 (def method row-major-bref ((buffer foreign-array) index)
   (with-slots (blk log-offset elt-type elt-size) buffer
