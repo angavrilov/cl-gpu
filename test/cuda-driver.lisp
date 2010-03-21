@@ -37,6 +37,22 @@
          (-body-))
     (cuda-destroy-context *cuda-ctx*)))
 
+(defvar *cuda-host-arr1*)
+(defvar *cuda-host-arr2*)
+(defvar *cuda-host-arr3*)
+(defvar *cuda-host-arr4*)
+
+(def fixture cuda-host-arrs
+  (with-deref-buffers ((*cuda-host-arr1*
+                        (make-cuda-host-array '(5 5) :element-type 'single-float :initial-element 0.0))
+                       (*cuda-host-arr2*
+                        (make-cuda-host-array '(5 5) :element-type 'single-float :initial-element 0.0))
+                       (*cuda-host-arr3*
+                        (make-cuda-host-array 25 :element-type 'single-float :initial-element 0.0))
+                       (*cuda-host-arr4*
+                        (make-cuda-host-array 25 :element-type 'single-float :initial-element 0.0)))
+    (-body-)))
+
 (def test verify-wrap-pitch (blk offset size commands)
   (cl-gpu::%cuda-linear-wrap-pitch blk offset size
                                    (lambda (&rest data)
@@ -76,6 +92,10 @@
 (def test test/cuda-driver/cuda-linear-foreign-copy ()
   (with-fixtures (cuda-context foreign-arrs)
     (test/buffers/copy *cuda-arr1* *foreign-arr2* *cuda-arr3* *foreign-arr4*)))
+
+(def test test/cuda-driver/cuda-linear-host-copy ()
+  (with-fixtures (cuda-context cuda-host-arrs)
+    (test/buffers/copy *cuda-host-arr1* *cuda-arr2* *cuda-host-arr3* *cuda-arr4*)))
 
 (def gpu-type test-array (&optional (len '*))
   `(array single-float (2 ,len 4)))

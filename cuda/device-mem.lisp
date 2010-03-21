@@ -5,7 +5,8 @@
 ;;; See LICENCE for details.
 ;;;
 ;;; This file implements the generic buffer interface for
-;;; a buffer based on CUDA linear memory allocations.
+;;; buffers based on CUDA device linear and pinned host
+;;; memory allocations.
 ;;;
 
 (in-package :cl-gpu)
@@ -168,3 +169,28 @@
                                              (+ (* dst-offset elt-size) d-log-offset))
                                 (+ (* src-offset elt-size) s-log-offset)
                                 (* count elt-size) t))))
+
+;;; Host memory array
+
+(def class* cuda-host-array (foreign-array)
+  ()
+  (:automatic-accessors-p nil))
+
+(def method print-object ((obj cuda-host-array) stream)
+  (print-buffer "CUDA Host Array" obj stream))
+
+(def (function e) make-cuda-host-array (dims &key (element-type 'single-float)
+                                             (foreign-type (lisp-to-foreign-elt-type element-type) ft-p)
+                                             initial-element flags)
+  (unless foreign-type
+    (error "Invalid foreign array type: ~S" (if ft-p foreign-type element-type)))
+  (let* ((dims (ensure-list dims))
+         (size (reduce #'* dims))
+         (elt-size (foreign-type-size foreign-type)))
+    (let* ((blk (cuda-alloc-host size :flags flags))
+           (buffer (make-instance 'cuda-host-array :blk blk :size size
+                                  :elt-type foreign-type :elt-size elt-size
+                                  :dims (to-uint32-vector dims))))
+      (if initial-element
+          (buffer-fill buffer initial-element)
+          buffer))))

@@ -218,7 +218,9 @@
   (reg-count 0)
   (warp-size 0)
   (shared-memory 0)
-  (destroy-queue nil))
+  (destroy-queue nil)
+  (can-map? nil)
+  (host-blocks (make-weak-set) :read-only t))
 
 (defstruct cuda-function
   "CUDA Kernel handle wrapper"
@@ -260,6 +262,15 @@
 
 (defstruct (cuda-static-blk (:include cuda-linear))
   (module nil :type cuda-module :read-only t))
+
+(defstruct (cuda-host-blk (:include foreign-block))
+  (context nil :type cuda-context :read-only t)
+  (portable? nil)
+  (write-combine? nil)
+  (mappings nil :read-only t))
+
+(defstruct (cuda-mapped-blk (:include cuda-linear))
+  (root nil :type cuda-host-blk))
 
 (defmethod print-object ((object cuda-context) stream)
   (print-unreadable-object (object stream :identity t)
@@ -320,7 +331,10 @@
                                          :warp-size (cuda-device-attr
                                                      device :warp-size)
                                          :shared-memory (cuda-device-attr
-                                                         device :max-shared-memory-per-block))))
+                                                         device :max-shared-memory-per-block)
+                                         :can-map? (and (member :map-host (ensure-list flags))
+                                                        (/= 0 (cuda-device-attr
+                                                               device :can-map-host-memory))))))
         (push context *cuda-context-list*)
         (push context (gethash thread *cuda-thread-contexts*))
         context))))
@@ -343,6 +357,8 @@
     (setf (cuda-context-destroy-queue context) nil)
     (dolist (blk (weak-set-snapshot (cuda-context-blocks context)))
       (setf (cuda-linear-handle blk) nil))
+    (dolist (blk (weak-set-snapshot (cuda-context-host-blocks context)))
+      (setf (foreign-block-ptr blk) nil))
     (dolist (module (cuda-context-modules context))
       (%cuda-module-invalidate module))
     nil))
@@ -580,8 +596,8 @@
   (if (cuda-linear-handle blk)
       (let ((context (cuda-linear-context blk)))
         (with-cuda-context (context)
-          (cancel-finalization blk)
           (cuda-invoke cuMemFree (cuda-linear-handle blk))
+          (cancel-finalization blk)
           (setf (cuda-linear-handle blk) nil)
           (weak-set-deletef (cuda-context-blocks context) blk)
           (setf (cuda-linear-wipe-cb blk) nil)
@@ -591,6 +607,61 @@
 
 (def method deallocate ((obj cuda-static-blk))
   (error "Cannot deallocate blocks that belong to modules."))
+
+;;; Host memory
+
+(defbitfield cuda-host-blk-flags
+  (:portable 1)
+  (:mapped 2)
+  (:write-combine 4))
+
+(defcfun "cuMemHostAlloc" cuda-error
+  (pptr (:pointer :pointer))
+  (size :unsigned-long)
+  (flags cuda-host-blk-flags))
+
+(defcfun "cuMemFreeHost" cuda-error
+  (ptr :pointer))
+
+(def function cuda-alloc-host (size &key flags)
+  (assert (> size 0) (size)
+          "Invalid host block size: ~A" size)
+  (assert (cuda-valid-context-p (cuda-current-context)))
+  (let ((context (cuda-current-context))
+        (flags (ensure-list flags)))
+    (cuda-context-destroy-queued-items context)
+    (let* ((ptr
+            (with-foreign-object (pptr :pointer)
+              (cuda-invoke cuMemHostAlloc pptr size flags)
+              (mem-ref pptr :pointer)))
+           (blk
+            (make-cuda-host-blk :ptr ptr :size size
+                                :context context
+                                :portable? (member :portable flags)
+                                :write-combine? (member :write-combine flags)
+                                :mappings
+                                (if (and (cuda-context-can-map? context)
+                                         (member :mapped flags))
+                                    (list 'mappings)))))
+      (cuda-context-queue-finalizer context blk (copy-cuda-host-blk blk))
+      (with-lock-held (*cuda-context-lock*)
+        (weak-set-addf (cuda-context-host-blocks context) blk))
+      blk)))
+
+(def method deallocate ((blk cuda-host-blk))
+  (if (cuda-host-blk-ptr blk)
+      (let* ((context (cuda-host-blk-context blk))
+             (wcontext (if (cuda-host-blk-portable? blk)
+                           (cuda-current-context)
+                           context)))
+        (with-cuda-context (wcontext)
+          (cuda-invoke cuMemFreeHost (cuda-host-blk-ptr blk))
+          (cancel-finalization blk)
+          (setf (cuda-host-blk-ptr blk) nil)
+          (with-lock-held (*cuda-context-lock*)
+            (weak-set-deletef (cuda-context-host-blocks context) blk))
+          nil))
+      (cerror "ignore" "CUDA host block already destroyed.")))
 
 ;;; CUDA Modules
 
