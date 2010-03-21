@@ -31,7 +31,7 @@
 (def method print-object ((obj cuda-mem-array) stream)
   (print-buffer "CUDA Array" obj stream))
 
-(def (function e) cuda-make-array (dims &key (element-type 'single-float)
+(def (function e) make-cuda-array (dims &key (element-type 'single-float)
                                         (foreign-type (lisp-to-foreign-elt-type element-type) ft-p)
                                         pitch-elt-size (pitch-level 1)
                                         initial-element)

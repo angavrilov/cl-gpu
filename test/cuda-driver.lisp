@@ -26,13 +26,13 @@
   (setf *cuda-ctx* (cuda-create-context 0))
   (unwind-protect
        (progn
-         (setf *cuda-arr1* (cuda-make-array '(5 5) :element-type 'single-float
+         (setf *cuda-arr1* (make-cuda-array '(5 5) :element-type 'single-float
                                             :pitch-elt-size 4 :initial-element 0.0))
-         (setf *cuda-arr2* (cuda-make-array '(5 5) :element-type 'single-float
+         (setf *cuda-arr2* (make-cuda-array '(5 5) :element-type 'single-float
                                             :pitch-elt-size 4 :initial-element 0.0))
-         (setf *cuda-arr3* (cuda-make-array '(5 5) :element-type 'single-float
+         (setf *cuda-arr3* (make-cuda-array '(5 5) :element-type 'single-float
                                             :pitch-elt-size 16 :initial-element 0))
-         (setf *cuda-arr4* (cuda-make-array '(5 5) :element-type 'single-float
+         (setf *cuda-arr4* (make-cuda-array '(5 5) :element-type 'single-float
                                             :initial-element 0))
          (-body-))
     (cuda-destroy-context *cuda-ctx*)))
@@ -105,7 +105,7 @@
         (set-index-buffer baz-val)
         (is (index-buffer? baz-val))
         ;; Attach an array
-        (setf bar-val (cuda-make-array '(2 10 4) :foreign-type :float :pitch-elt-size 16))
+        (setf bar-val (make-cuda-array '(2 10 4) :foreign-type :float :pitch-elt-size 16))
         (is (bufferp bar-val))
         (is (eql (deref-buffer bar-val) 1))
         (is (equal (rest (coerce (buffer-as-array (cl-gpu::buffer-of bar-var)) 'list))
@@ -172,7 +172,7 @@
     (test/translator/compute :cuda)))
 
 (def function cuda-allocate-dummy-block ()
-  (cuda-make-array 10)
+  (make-cuda-array 10)
   (values nil nil nil nil nil))
 
 (def function cuda-context-block-cnt (ctx)
@@ -191,7 +191,7 @@
       (is (= cnt (cuda-context-block-cnt *cuda-ctx*)))
       (is (typep (car (cl-gpu::cuda-context-destroy-queue *cuda-ctx*))
                  'cl-gpu::cuda-linear))
-      (with-deref-buffer (buf (cuda-make-array 10))
+      (with-deref-buffer (buf (make-cuda-array 10))
         (declare (ignore buf))
         (is (null (cl-gpu::cuda-context-destroy-queue *cuda-ctx*)))))))
 
