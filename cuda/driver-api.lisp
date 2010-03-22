@@ -273,7 +273,7 @@
   (weak-mappings nil :read-only t))
 
 (defstruct (cuda-mapped-blk (:include cuda-linear))
-  (root nil :type cuda-host-blk))
+  (root nil :type (or null cuda-host-blk)))
 
 (defmethod print-object ((object cuda-context) stream)
   (print-unreadable-object (object stream :identity t)
@@ -650,6 +650,11 @@
 (defcfun "cuMemFreeHost" cuda-error
   (ptr :pointer))
 
+(defcfun "cuMemHostGetDevicePointer" cuda-error
+  (pdptr (:pointer cuda-device-ptr))
+  (ptr :pointer)
+  (flags :unsigned-int))
+
 (def function cuda-alloc-host (size &key flags)
   (assert (> size 0) (size)
           "Invalid host block size: ~A" size)
@@ -688,12 +693,16 @@
           (push (curry #'%cuda-linear-wipe-references item)
                 (cuda-context-cleanup-queue (cuda-linear-context item)))))))
 
+(def function cuda-host-blk-any-context (blk)
+  (let ((context (cuda-host-blk-context blk)))
+    (if (cuda-host-blk-portable? blk)
+        (or (cuda-current-context) context)
+        context)))
+
 (def method deallocate ((blk cuda-host-blk))
   (if (cuda-host-blk-ptr blk)
       (let* ((context (cuda-host-blk-context blk))
-             (wcontext (if (cuda-host-blk-portable? blk)
-                           (cuda-current-context)
-                           context)))
+             (wcontext (cuda-host-blk-any-context blk)))
         (with-cuda-context (wcontext)
           (cuda-invoke cuMemFreeHost (cuda-host-blk-ptr blk))
           (cancel-finalization blk)
@@ -703,6 +712,27 @@
           (%cuda-host-blk-wipe-mappings blk :context wcontext)
           nil))
       (cerror "ignore" "CUDA host block already destroyed.")))
+
+(def function cuda-map-host-blk (blk)
+  (or (find (cuda-current-context) (cuda-host-blk-mappings blk)
+            :test #'eq :key #'cuda-linear-context)
+      (with-cuda-context ((cuda-host-blk-any-context blk))
+        (unless (and (cuda-host-blk-weak-mappings blk)
+                     (cuda-context-can-map? *cuda-context*))
+          (error "Flag mismatch: cannot map ~S in context ~S" blk *cuda-context*))
+        (with-foreign-objects ((paddr 'cuda-device-ptr))
+          (cuda-invoke cuMemHostGetDevicePointer paddr (cuda-host-blk-ptr blk) 0)
+          (let* ((size (cuda-host-blk-size blk))
+                 (mblk (make-cuda-mapped-blk :context *cuda-context* :root blk
+                                             :size size :extent size
+                                             :width size :pitch size :height 1
+                                             :handle (mem-ref paddr 'cuda-device-ptr)))
+                 (weak-mblk (copy-cuda-mapped-blk mblk)))
+            (setf (cuda-mapped-blk-root weak-mblk) nil)
+            (with-lock-held (*cuda-context-lock*)
+              (push mblk (cuda-host-blk-mappings blk))
+              (push weak-mblk (cdr (cuda-host-blk-weak-mappings blk))))
+            (values mblk))))))
 
 ;;; CUDA Modules
 

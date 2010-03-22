@@ -91,12 +91,13 @@
           (error "Byte offset ~A+~A not aligned to pitch width ~A"
                  log-offset byte-offset width)))
       ;; Everything seems OK, create the new descriptor
-      (make-instance 'cuda-mem-array :blk blk :size size
+      (make-instance (class-of buffer) :blk blk :size size
                      :displaced-to buffer :log-offset new-offset :phys-offset phys-offset
                      :elt-type foreign-type :elt-size elt-size
                      :dims (to-uint32-vector dimensions)
                      :strides (to-uint32-vector (compute-linear-strides blk dimensions
                                                                         elt-size pitch-level))))))
+
 (def method buffer-refcnt ((buffer cuda-mem-array))
   (buffer-refcnt (slot-value buffer 'blk)))
 
@@ -179,6 +180,13 @@
 (def method print-object ((obj cuda-host-array) stream)
   (print-buffer "CUDA Host Array" obj stream))
 
+(def class* cuda-mapped-array (cuda-mem-array)
+  ()
+  (:automatic-accessors-p nil))
+
+(def method print-object ((obj cuda-mapped-array) stream)
+  (print-buffer "CUDA Mapped Host Array" obj stream))
+
 (def (function e) make-cuda-host-array (dims &key (element-type 'single-float)
                                              (foreign-type (lisp-to-foreign-elt-type element-type) ft-p)
                                              initial-element flags)
@@ -187,10 +195,38 @@
   (let* ((dims (ensure-list dims))
          (size (reduce #'* dims))
          (elt-size (foreign-type-size foreign-type)))
-    (let* ((blk (cuda-alloc-host size :flags flags))
+    (let* ((blk (cuda-alloc-host (* size elt-size) :flags flags))
            (buffer (make-instance 'cuda-host-array :blk blk :size size
                                   :elt-type foreign-type :elt-size elt-size
                                   :dims (to-uint32-vector dims))))
       (if initial-element
           (buffer-fill buffer initial-element)
           buffer))))
+
+(def method buffer-displace :around ((buffer cuda-host-array) &key
+                                     byte-offset foreign-type size dimensions
+                                     offset element-type mapping)
+  (declare (ignore byte-offset foreign-type size dimensions offset element-type))
+  (aprog1 (call-next-method)
+    (ecase mapping
+      ((:device :gpu)
+       (with-slots (blk log-offset elt-size dims) it
+         (let* ((blk (cuda-map-host-blk blk))
+                (strides (compute-strides (coerce dims 'list) (/ (cuda-linear-extent blk) elt-size))))
+           (change-class it 'cuda-mapped-array
+                         :blk blk :phys-offset log-offset
+                         :strides (to-uint32-vector strides)))))
+      ;; Valid NOP
+      ((nil :host)))))
+
+(def method buffer-displace :around ((buffer cuda-mapped-array) &key
+                                     byte-offset foreign-type size dimensions
+                                     offset element-type mapping)
+  (declare (ignore byte-offset foreign-type size dimensions offset element-type))
+  (aprog1 (call-next-method)
+    (ecase mapping
+      (:host
+       (change-class it 'cuda-host-array
+                     :blk (cuda-mapped-blk-root (slot-value buffer 'blk))))
+      ;; Valid NOP
+      ((nil :device :gpu)))))
