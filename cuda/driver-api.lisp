@@ -220,7 +220,8 @@
   (shared-memory 0)
   (destroy-queue nil)
   (can-map? nil)
-  (host-blocks (make-weak-set) :read-only t))
+  (host-blocks (make-weak-set) :read-only t)
+  (cleanup-queue nil))
 
 (defstruct cuda-function
   "CUDA Kernel handle wrapper"
@@ -268,7 +269,8 @@
   (context nil :type cuda-context :read-only t)
   (portable? nil)
   (write-combine? nil)
-  (mappings nil :read-only t))
+  (mappings nil)
+  (weak-mappings nil :read-only t))
 
 (defstruct (cuda-mapped-blk (:include cuda-linear))
   (root nil :type cuda-host-blk))
@@ -286,7 +288,7 @@
 
 (declaim (type (or cuda-context null) *cuda-context*)
          (type hash-table *cuda-thread-contexts*)
-         (inline cuda-current-context))
+         (inline cuda-current-context cuda-ensure-context))
 
 (defparameter *cuda-context* nil
   "Current active CUDA context")
@@ -311,8 +313,11 @@
 
 (def function cuda-ensure-context (context)
   (let ((current (cuda-current-context)))
+    (declare (type cuda-context current))
     (unless (eq current context)
       (error "CUDA context ~A needed, ~A current." context current))
+    (when (cuda-context-cleanup-queue current)
+      (cuda-context-cleanup-queued-items current))
     current))
 
 (def macro with-cuda-context ((context) &body body)
@@ -350,6 +355,8 @@
     ;; Destroy the context
     (cuda-invoke cuCtxDestroy (cuda-context-handle context))
     ;; Unlink the descriptor
+    (when (eq *cuda-context* context)
+      (setf *cuda-context* nil))
     (setf (cuda-context-handle context) nil)
     (setf (cuda-context-thread context) nil)
     (deletef *cuda-context-list* context)
@@ -359,9 +366,11 @@
     (dolist (blk (weak-set-snapshot (cuda-context-blocks context)))
       (setf (cuda-linear-handle blk) nil))
     (dolist (blk (weak-set-snapshot (cuda-context-host-blocks context)))
-      (setf (foreign-block-ptr blk) nil))
+      (%cuda-host-blk-invalidate blk))
     (dolist (module (cuda-context-modules context))
       (%cuda-module-invalidate module))
+    (dolist (blk (weak-set-snapshot (cuda-context-host-blocks context)))
+      (%cuda-host-blk-wipe-mappings blk :no-local t))
     nil))
 
 (def function cuda-context-queue-finalizer (context object queue-item)
@@ -376,6 +385,13 @@
      while object do
        (with-simple-restart (continue "Continue destroying queued objects")
          (deallocate object))))
+
+(def function cuda-context-cleanup-queued-items (context)
+  (loop for object = (with-lock-held (*cuda-context-lock*)
+                       (pop (cuda-context-cleanup-queue context)))
+     while object do
+       (with-simple-restart (continue "Continue calling cleanup handlers")
+         (funcall object))))
 
 ;;; Linear memory
 
@@ -582,6 +598,10 @@
       (deletef (cuda-linear-references blk) target :test #'eq)
       (deref-buffer target))))
 
+(def function %cuda-linear-invalidate (blk)
+  (setf (cuda-linear-handle blk) nil)
+  (setf (cuda-linear-wipe-cb blk) nil))
+
 (def function %cuda-linear-wipe-references (blk)
   ;; Wipe blocks that reference this one
   (dolist (tgt (weak-set-snapshot (cuda-linear-referenced-by blk)))
@@ -606,9 +626,8 @@
         (with-cuda-context (context)
           (cuda-invoke cuMemFree (cuda-linear-handle blk))
           (cancel-finalization blk)
-          (setf (cuda-linear-handle blk) nil)
+          (%cuda-linear-invalidate blk)
           (weak-set-deletef (cuda-context-blocks context) blk)
-          (setf (cuda-linear-wipe-cb blk) nil)
           (%cuda-linear-wipe-references blk)
           nil))
       (cerror "ignore" "CUDA block already destroyed.")))
@@ -647,7 +666,7 @@
                                 :context context
                                 :portable? (member :portable flags)
                                 :write-combine? (member :write-combine flags)
-                                :mappings
+                                :weak-mappings
                                 (if (and (cuda-context-can-map? context)
                                          (member :mapped flags))
                                     (list 'mappings)))))
@@ -655,6 +674,19 @@
       (with-lock-held (*cuda-context-lock*)
         (weak-set-addf (cuda-context-host-blocks context) blk))
       blk)))
+
+(def function %cuda-host-blk-invalidate (blk)
+  (setf (cuda-host-blk-ptr blk) nil)
+  (mapc #'%cuda-linear-invalidate (cuda-host-blk-mappings blk)))
+
+(def function %cuda-host-blk-wipe-mappings (blk &key (context (cuda-host-blk-context blk)) no-local)
+  (dolist (item (cdr (cuda-host-blk-weak-mappings blk)))
+    (if (eq context (cuda-linear-context item))
+        (unless no-local
+          (%cuda-linear-wipe-references item))
+        (with-lock-held (*cuda-context-lock*)
+          (push (curry #'%cuda-linear-wipe-references item)
+                (cuda-context-cleanup-queue (cuda-linear-context item)))))))
 
 (def method deallocate ((blk cuda-host-blk))
   (if (cuda-host-blk-ptr blk)
@@ -665,9 +697,10 @@
         (with-cuda-context (wcontext)
           (cuda-invoke cuMemFreeHost (cuda-host-blk-ptr blk))
           (cancel-finalization blk)
-          (setf (cuda-host-blk-ptr blk) nil)
+          (%cuda-host-blk-invalidate blk)
           (with-lock-held (*cuda-context-lock*)
             (weak-set-deletef (cuda-context-host-blocks context) blk))
+          (%cuda-host-blk-wipe-mappings blk :context wcontext)
           nil))
       (cerror "ignore" "CUDA host block already destroyed.")))
 
@@ -726,8 +759,7 @@
 (def function %cuda-module-invalidate (module)
   (setf (cuda-module-handle module) nil)
   (dolist (var (cuda-module-vars module))
-    (setf (cuda-linear-handle (cdr var)) nil)
-    (setf (cuda-linear-wipe-cb (cdr var)) nil))
+    (%cuda-linear-invalidate (cdr var)))
   (dolist (fun (cuda-module-functions module))
     (setf (cuda-function-handle fun) nil)))
 
