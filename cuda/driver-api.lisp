@@ -255,9 +255,10 @@
   (pitch-elt 0 :type fixnum :read-only t)
   (handle nil)
   (wipe-cb nil)
-  ;; Reference lists; these must be shared with
-  ;; the copy used by the finalizer.
-  (references (list 'ref-set) :read-only t)
+  ;; Reference lists; the weak ones must be shared
+  ;; with the copy used by the finalizer.
+  (references nil)
+  (weak-references (make-weak-set) :read-only t)
   (referenced-by (make-weak-set) :read-only t))
 
 (defstruct (cuda-static-blk (:include cuda-linear))
@@ -563,32 +564,39 @@
 
 (def function cuda-linear-reference (blk target)
   (let ((crefs (cuda-linear-references blk))
+        (wrefs (cuda-linear-weak-references blk))
         (trefs (cuda-linear-referenced-by target)))
-    (unless (member target (cdr crefs) :test #'eq)
+    (unless (member target crefs :test #'eq)
       (weak-set-addf trefs blk)
-      (push target (cdr crefs))
+      (weak-set-addf wrefs target)
+      (push target (cuda-linear-references blk))
       (ref-buffer target))))
 
 (def function cuda-linear-unreference (blk target)
   (let ((crefs (cuda-linear-references blk))
+        (wrefs (cuda-linear-weak-references blk))
         (trefs (cuda-linear-referenced-by target)))
-    (when (member target (cdr crefs) :test #'eq)
+    (when (member target crefs :test #'eq)
       (weak-set-deletef trefs blk)
-      (deletef (cdr crefs) target :test #'eq)
+      (weak-set-deletef wrefs target)
+      (deletef (cuda-linear-references blk) target :test #'eq)
       (deref-buffer target))))
 
 (def function %cuda-linear-wipe-references (blk)
   ;; Wipe blocks that reference this one
   (dolist (tgt (weak-set-snapshot (cuda-linear-referenced-by blk)))
     (with-simple-restart (continue "Continue invoking wipe callbacks")
-      (deletef (cdr (cuda-linear-references tgt)) blk :test #'eq)
+      (deletef (cuda-linear-references tgt) blk :test #'eq)
+      (weak-set-deletef (cuda-linear-weak-references tgt) blk)
       (aif (ensure-weak-pointer-value (cuda-linear-wipe-cb tgt))
            (funcall it tgt blk)
            (awhen (cuda-linear-handle tgt)
              (cuda-invoke cuMemsetD8 it 0 (cuda-linear-extent tgt))
              (warn "Block deallocated while referenced, reference source wiped.")))))
   ;; Unreference blocks linked by this one
-  (dolist (tgt (copy-list (cdr (cuda-linear-references blk))))
+  (setf (cuda-linear-references blk)
+        (weak-set-snapshot (cuda-linear-weak-references blk)))
+  (dolist (tgt (cuda-linear-references blk))
     (with-simple-restart (continue "Continue invoking wipe callbacks")
       (cuda-linear-unreference blk tgt))))
 
