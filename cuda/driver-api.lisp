@@ -286,7 +286,7 @@
     (unless (cuda-context-handle object)
       (format stream " (DEAD)"))))
 
-(declaim (type (or cuda-context null) *cuda-context*)
+(declaim (type (or null cuda-context) *cuda-context*)
          (type hash-table *cuda-thread-contexts*)
          (inline cuda-current-context cuda-ensure-context))
 
