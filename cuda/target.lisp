@@ -102,6 +102,8 @@
 
 ;;; Built-in functions
 
+;; Tuples
+
 (def (c-code-emitter :in cuda-target) tuple (&rest args)
   (emit "make_~A" (c-type-string (form-c-type-of -form-)))
   (emit-separated -stream- args ","))
@@ -117,4 +119,24 @@
                                           (format nil "TMP.~A" name))
              do (code ";"))))
       (code tuple ".x")))
+
+;; Dimensions
+
+(macrolet ((dimfun (name stem)
+             `(progn
+                (def (type-computer :in cuda-target) ,name (&optional dimension)
+                  (if dimension
+                      (let ((idx (ensure-int-constant dimension)))
+                        (unless (and (>= idx 0) (<= idx 3))
+                          (error "Invalid grid dimension index ~A in call to ~A" idx ',name))
+                        :uint32)
+                      `(:tuple :uint32 3)))
+                (def (c-code-emitter :in cuda-target) ,name (&optional dimension)
+                  (if dimension
+                      (code ,stem "." (aref #("x" "y" "z") (ensure-int-constant dimension)))
+                      (code ,stem))))))
+  (dimfun thread-index "threadIdx")
+  (dimfun thread-count "blockDim")
+  (dimfun block-index "blockIdx")
+  (dimfun block-count "gridDim"))
 

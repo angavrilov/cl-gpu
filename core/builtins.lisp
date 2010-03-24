@@ -76,6 +76,22 @@
      do (setf (row-major-aref arr (+ i index)) (row-major-aref value i)))
   value)
 
+;; Thread grid dimensions
+
+(macrolet ((dimfun (name short-stem)
+             `(progn
+                (def (function e) ,name (&optional dimension)
+                  (declare (ignore dimension))
+                  (error "~S is only supported in GPU code" ',name))
+                (def (symbol-macro e) ,short-stem (,name))
+                (def (symbol-macro e) ,(symbolicate short-stem :-X) (,name 0))
+                (def (symbol-macro e) ,(symbolicate short-stem :-Y) (,name 1))
+                (def (symbol-macro e) ,(symbolicate short-stem :-Z) (,name 2)))))
+  (dimfun thread-index thread-idx)
+  (dimfun thread-count thread-cnt)
+  (dimfun block-index block-idx)
+  (dimfun block-count block-cnt))
+
 ;; Misc
 
 (declaim (inline nonzerop))
