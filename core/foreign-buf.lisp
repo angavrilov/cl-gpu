@@ -10,10 +10,45 @@
 
 (in-package :cl-gpu)
 
+;;; Reference counting
+
+(defstruct counted-block
+  (refcnt 1 :type fixnum)
+  (handle nil))
+
+(defgeneric deallocate (blk)
+  (:documentation "Deallocates the block")
+  (:method :around ((blk counted-block))
+    (if (counted-block-handle blk)
+        (call-next-method)
+        (cerror "ignore" "This block has already been deallocated"))))
+
+(def method buffer-refcnt ((blk counted-block))
+  (if (counted-block-handle blk)
+      (counted-block-refcnt blk)
+      nil))
+
+(def method ref-buffer ((blk counted-block))
+  (incf (counted-block-refcnt blk)))
+
+(def method deref-buffer ((blk counted-block))
+  (unless (> (decf (counted-block-refcnt blk)) 0)
+    (deallocate blk)))
+
+(def macro delegate-buffer-refcnt ((var class) target)
+  `(progn
+     (def method buffer-refcnt ((,var ,class))
+       (buffer-refcnt ,target))
+     (def method ref-buffer ((,var ,class))
+       (ref-buffer ,target))
+     (def method deref-buffer ((,var ,class))
+       (deref-buffer ,target))))
+
 ;;; Common code for foreign buffers
 
 (def class* abstract-foreign-buffer ()
-  ((displaced-to :type (or abstract-foreign-buffer null) :initform nil
+  ((blk :type counted-block)
+   (displaced-to :type (or abstract-foreign-buffer null) :initform nil
                  :documentation "Foreign array this one is displaced to")
    (log-offset :type fixnum :initform 0
                :documentation "Offset to the start of the block")
@@ -24,6 +59,8 @@
   (:automatic-accessors-p nil))
 
 (def method bufferp ((buffer abstract-foreign-buffer)) :foreign)
+
+(delegate-buffer-refcnt (buffer abstract-foreign-buffer) (slot-value buffer 'blk))
 
 (def method buffer-foreign-type ((buffer abstract-foreign-buffer))
   (slot-value buffer 'elt-type))
@@ -116,32 +153,13 @@
 
 ;;; Buffer backed by a host foreign block
 
-(defstruct foreign-block
-  (refcnt 1 :type fixnum)
-  (ptr nil)
+(defstruct (foreign-block (:include counted-block))
   (size 0 :type fixnum :read-only t))
 
-(defgeneric deallocate (blk)
-  (:documentation "Deallocates the block")
-  (:method ((blk foreign-block))
-    (if (foreign-block-ptr blk)
-        (progn
-          (cancel-finalization blk)
-          (foreign-free (foreign-block-ptr blk))
-          (setf (foreign-block-ptr blk) nil))
-        (cerror "ignore" "This block has already been deallocated"))))
-
-(def method buffer-refcnt ((blk foreign-block))
-  (if (foreign-block-ptr blk)
-      (foreign-block-refcnt blk)
-      nil))
-
-(def method ref-buffer ((blk foreign-block))
-  (incf (foreign-block-refcnt blk)))
-
-(def method deref-buffer ((blk foreign-block))
-  (unless (> (decf (foreign-block-refcnt blk)) 0)
-    (deallocate blk)))
+(def method deallocate ((blk foreign-block))
+  (cancel-finalization blk)
+  (foreign-free (foreign-block-handle blk))
+  (setf (foreign-block-handle blk) nil))
 
 ;; The actual buffer:
 
@@ -163,7 +181,7 @@
     (let* ((ptr (if initial-element
                     (foreign-alloc foreign-type :count size :initial-element initial-element)
                     (foreign-alloc foreign-type :count size)))
-           (blk (make-foreign-block :ptr ptr
+           (blk (make-foreign-block :handle ptr
                                     :size (* size elt-size)))
            (buffer (make-instance 'foreign-array :blk blk :size size
                                   :elt-type foreign-type :elt-size elt-size
@@ -182,23 +200,14 @@
                    :elt-type foreign-type :elt-size (foreign-type-size foreign-type)
                    :dims (to-uint32-vector dimensions))))
 
-(def method buffer-refcnt ((buffer foreign-array))
-  (buffer-refcnt (slot-value buffer 'blk)))
-
-(def method ref-buffer ((buffer foreign-array))
-  (ref-buffer (slot-value buffer 'blk)))
-
-(def method deref-buffer ((buffer foreign-array))
-  (deref-buffer (slot-value buffer 'blk)))
-
 (def method row-major-bref ((buffer foreign-array) index)
   (with-slots (blk log-offset elt-type elt-size) buffer
-    (mem-ref (foreign-block-ptr blk) elt-type
+    (mem-ref (foreign-block-handle blk) elt-type
              (+ (* index elt-size) log-offset))))
 
 (def method (setf row-major-bref) (value (buffer foreign-array) index)
   (with-slots (blk log-offset elt-type elt-size) buffer
-    (setf (mem-ref (foreign-block-ptr blk) elt-type
+    (setf (mem-ref (foreign-block-handle blk) elt-type
                    (+ (* index elt-size) log-offset))
           value)))
 
@@ -220,18 +229,18 @@
 (def method buffer-fill ((buffer foreign-array) value &key start end)
   (with-slots (blk log-offset elt-type elt-size) buffer
     (if (eql value 0)
-        (memset (inc-pointer (foreign-block-ptr blk)
+        (memset (inc-pointer (foreign-block-handle blk)
                              (+ (* start elt-size) log-offset))
                 0
                 (* (- end start) elt-size))
-        (loop with base = (inc-pointer (foreign-block-ptr blk) log-offset)
+        (loop with base = (inc-pointer (foreign-block-handle blk) log-offset)
            for i from start below end
            do (setf (mem-aref base elt-type i) value)))))
 
 (def method %copy-buffer-data ((src array) (dst foreign-array) src-offset dst-offset count)
   (with-slots (blk log-offset elt-size) dst
     (with-pointer-to-array (ptr src)
-      (memcpy (inc-pointer (foreign-block-ptr blk)
+      (memcpy (inc-pointer (foreign-block-handle blk)
                            (+ (* dst-offset elt-size) log-offset))
               (inc-pointer ptr (* src-offset elt-size))
               (* count elt-size)))))
@@ -240,15 +249,15 @@
   (with-slots (blk log-offset elt-size) src
     (with-pointer-to-array (ptr dst)
       (memcpy (inc-pointer ptr (* dst-offset elt-size))
-              (inc-pointer (foreign-block-ptr blk)
+              (inc-pointer (foreign-block-handle blk)
                            (+ (* src-offset elt-size) log-offset))
               (* count elt-size)))))
 
 (def method %copy-buffer-data ((src foreign-array) (dst foreign-array) src-offset dst-offset count)
   (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
     (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
-      (memmove (inc-pointer (foreign-block-ptr d-blk)
+      (memmove (inc-pointer (foreign-block-handle d-blk)
                             (+ (* dst-offset elt-size) d-log-offset))
-               (inc-pointer (foreign-block-ptr s-blk)
+               (inc-pointer (foreign-block-handle s-blk)
                             (+ (* src-offset elt-size) s-log-offset))
                (* count elt-size)))))

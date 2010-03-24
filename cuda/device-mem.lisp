@@ -98,15 +98,6 @@
                      :strides (to-uint32-vector (compute-linear-strides blk dimensions
                                                                         elt-size pitch-level))))))
 
-(def method buffer-refcnt ((buffer cuda-mem-array))
-  (buffer-refcnt (slot-value buffer 'blk)))
-
-(def method ref-buffer ((buffer cuda-mem-array))
-  (ref-buffer (slot-value buffer 'blk)))
-
-(def method deref-buffer ((buffer cuda-mem-array))
-  (deref-buffer (slot-value buffer 'blk)))
-
 (def method row-major-bref ((buffer cuda-mem-array) index)
   (with-slots (blk log-offset elt-type elt-size) buffer
     (with-foreign-object (tmp elt-type)
@@ -157,7 +148,7 @@
   (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
     (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
       (%cuda-linear-dh-transfer d-blk
-                                (inc-pointer (foreign-block-ptr s-blk)
+                                (inc-pointer (foreign-block-handle s-blk)
                                              (+ (* src-offset elt-size) s-log-offset))
                                 (+ (* dst-offset elt-size) d-log-offset)
                                 (* count elt-size) nil))))
@@ -166,7 +157,7 @@
   (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
     (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
       (%cuda-linear-dh-transfer s-blk
-                                (inc-pointer (foreign-block-ptr d-blk)
+                                (inc-pointer (foreign-block-handle d-blk)
                                              (+ (* dst-offset elt-size) d-log-offset))
                                 (+ (* src-offset elt-size) s-log-offset)
                                 (* count elt-size) t))))
