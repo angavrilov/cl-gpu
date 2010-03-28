@@ -19,6 +19,9 @@
 (def form-attribute-accessor gpu-variable
   :type (or gpu-variable null) :forms name-definition-form)
 
+(def form-attribute-accessor shared-identity
+  :type (or gpu-shared-identity null) :forms name-definition-form)
+
 (def form-attribute-accessor assigned-to?
   :type boolean :forms (lexical-variable-binding-form
                         function-argument-form))
@@ -244,6 +247,20 @@
                   (ignorable ,env))
          (destructuring-bind ,args (cdr ,whole)
            ,@code)))))
+
+;;; Shared variable decls
+
+(declaim (declaration shared))
+
+(def form-class shared-declaration-form (variable-declaration-form)
+  ())
+
+(def unwalker shared-declaration-form ()
+  `(shared ,(name-of -form-)))
+
+(def declaration-walker shared (&rest vars)
+  (do-list-collect (var vars)
+    (make-declaration 'shared-declaration-form :name var)))
 
 ;;; Optimize decls
 

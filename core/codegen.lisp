@@ -48,7 +48,7 @@
 
 ;;; Local variables
 
-(def layered-method generate-c-code ((var gpu-local-var))
+(def layered-method generate-c-code ((var gpu-lexical-var))
   (with-slots (c-name item-type dimension-mask static-asize) var
     (cond
       ;; Fixed-size array
@@ -62,24 +62,24 @@
       ;; Scalar
       (t (format nil "~A ~A" (c-type-string item-type) c-name)))))
 
-(def layered-method generate-var-ref ((obj gpu-local-var))
+(def layered-method generate-var-ref ((obj gpu-lexical-var))
   (c-name-of obj))
 
-(def layered-method generate-array-dim ((obj gpu-local-var) idx)
+(def layered-method generate-array-dim ((obj gpu-lexical-var) idx)
   (with-slots (dimension-mask) obj
     (aref dimension-mask idx)))
 
-(def layered-method generate-array-size ((obj gpu-local-var))
+(def layered-method generate-array-size ((obj gpu-lexical-var))
   (with-slots (static-asize) obj
     (assert static-asize)
     static-asize))
 
-(def layered-method generate-array-extent ((obj gpu-local-var))
+(def layered-method generate-array-extent ((obj gpu-lexical-var))
   (with-slots (static-asize) obj
     (assert static-asize)
     static-asize))
 
-(def layered-method generate-array-stride ((obj gpu-local-var) idx)
+(def layered-method generate-array-stride ((obj gpu-lexical-var) idx)
   (with-slots (c-name dimension-mask static-asize) obj
     (assert static-asize)
     (reduce #'* dimension-mask :start (1+ idx))))
@@ -228,10 +228,11 @@
 ;;; Top-level constructs
 
 (def layered-method generate-c-code ((obj gpu-function))
-  (with-slots (c-name return-type arguments body) obj
-    (format nil "~A ~A(~{~A~^, ~}) {~%~A~%}~%"
+  (with-slots (c-name return-type arguments shared-vars body) obj
+    (format nil "~A ~A(~{~A~^, ~}) {~%~{  ~A;~%~}~A~%}~%"
             (c-type-string return-type) c-name
             (flatten (mapcar #'generate-c-code arguments))
+            (mapcar #'generate-c-code shared-vars)
             body)))
 
 (def layered-method generate-c-code ((obj gpu-module))

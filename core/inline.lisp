@@ -322,7 +322,22 @@
         (dolist (item (body-of tree))
           (walk-tree-with-specials item #'visitor))))))
 
+;;; Shared variable instance assignment
+
+(def function assign-shared-identities (tree)
+  (map-ast (lambda (form)
+             (typecase form
+               (lexical-variable-binding-form
+                (when (find-form-by-name (name-of form)
+                                         (declarations-of (parent-of form))
+                                         :type 'shared-declaration-form)
+                  (setf (shared-identity-of form)
+                        (make-instance 'gpu-shared-identity :name (name-of form))))))
+             form)
+           tree))
+
 (def function preprocess-tree (tree global-vars)
+  (assign-shared-identities tree)
   ;; Inline functions
   (setf tree (inline-all-functions tree))
   ;; Convert global var refs to &aux args.

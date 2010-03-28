@@ -55,6 +55,9 @@
               "__device__")
           (call-next-method)))
 
+(def layered-method generate-c-code :in cuda-target ((obj gpu-shared-var))
+  (concatenate 'string "__shared__ " (call-next-method)))
+
 ;;; C types
 
 (def layered-method c-type-string :in cuda-target (type)
@@ -139,4 +142,15 @@
   (dimfun thread-count "blockDim")
   (dimfun block-index "blockIdx")
   (dimfun block-count "gridDim"))
+
+;; Synchronization
+
+(def (c-code-emitter :in cuda-target) barrier (&optional mode)
+  (code (acase (unwrap-keyword-const mode)
+          ((nil :block) "__syncthreads()")
+          ((:block-fence) "__threadfence_block()")
+          ((:grid-fence) "__threadfence()")
+          ((:system-fence) "__threadfence_system()")
+          (otherwise
+           (error "Invalid CUDA barrier mode: ~S" it)))))
 

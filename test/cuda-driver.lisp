@@ -202,6 +202,26 @@
       (kernel :thread-cnt-x 4 :thread-cnt-y 4)
       (is (index-buffer? idxset)))))
 
+(def test test/cuda-driver/shared-mem ()
+  (with-fixture cuda-context
+    (with-test-gpu-module :cuda
+        ((:variable idxset (array uint32 (4 4)))
+         (:kernel kernel ()
+           (flet ((xxx (stage2?)
+                    (let ((tmp (make-array '(4 4) :element-type 'uint32)))
+                      (declare (shared tmp))
+                      (if stage2?
+                          (setf (aref idxset thread-idx-y thread-idx-x)
+                                (aref tmp (- 3 thread-idx-y) thread-idx-x))
+                          (setf (aref tmp thread-idx-y thread-idx-x)
+                                (+ (* thread-cnt-x (- 3 thread-idx-y)) thread-idx-x))))))
+             (xxx nil)
+             (barrier)
+             (xxx t))))
+      (is (zero-buffer? idxset))
+      (kernel :thread-cnt-x 4 :thread-cnt-y 4)
+      (is (index-buffer? idxset)))))
+
 (def function cuda-allocate-dummy-block ()
   (make-cuda-array 10)
   (values nil nil nil nil nil))

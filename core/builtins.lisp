@@ -98,6 +98,14 @@
 (def (function e) nonzerop (arg)
   (not (zerop arg)))
 
+(def (function e) barrier (&optional mode)
+  (declare (ignore mode))
+  (error "Barriers are only supported in GPU code"))
+
+(def type-computer barrier (&optional mode)
+  (unless (or (null mode) (eq mode/type :keyword))
+    (error "Must be a keyword constant: ~S" (unwalk-form mode)))
+  :void)
 
 ;;; AREF
 

@@ -284,16 +284,32 @@
 (def function make-local-c-name (name)
   (unique-c-name name (unique-name-tbl-of *cur-gpu-function*)))
 
+(def function check-fixed-dims (dims)
+  (when (and dims (not (every #'numberp dims)))
+    (error "Local arrays must have fixed dimensions: ~S" type-spec)))
+
 (def function make-local-var (name type-spec &key from-c-type? (c-name (make-local-c-name name)))
   (multiple-value-bind (item-type dims)
       (if from-c-type?
           type-spec
           (parse-global-type type-spec))
-    (when (and dims (not (every #'numberp dims)))
-      (error "Local arrays must have fixed dimensions: ~S" type-spec))
+    (check-fixed-dims dims)
     (make-instance 'gpu-local-var
                    :name name :c-name c-name
                    :item-type item-type :dimension-mask dims)))
+
+(def function make-shared-var (identity type-spec decl-type)
+  (or (find identity (shared-vars-of *cur-gpu-function*) :key #'identity-of)
+      (multiple-value-bind (item-type dims)
+          (if type-spec (parse-global-type type-spec) decl-type)
+        (check-fixed-dims dims)
+        (let* ((name (name-of identity))
+               (var (make-instance 'gpu-shared-var :name name
+                                   :c-name (make-local-c-name name)
+                                   :item-type item-type :dimension-mask dims
+                                   :identity identity)))
+          (push var (shared-vars-of *cur-gpu-function*))
+          var))))
 
 ;;; Type propagation engine
 
@@ -550,15 +566,21 @@
             (t
              (verify-cast init-type decl-type form
                           :prefix "variable initialization ")))
-      (when (array-c-type? decl-type)
-        (when values-init-type
-          (error "Arrays cannot be assigned through (values)."))
-        (setf (gpu-variable-of form)
-              (if init-form
-                  (ensure-gpu-var init-form)
-                  (make-local-var (name-of form) lisp-decl-type)))
-        (unless (array-var? (gpu-variable-of form))
-          (error "Must be an array variable: ~S" (unwalk-form form))))
+      (cond ((shared-identity-of form)
+             (when (or (initial-value-of form) values-init-type)
+               (error "Shared variables cannot have initialization forms."))
+             (setf (gpu-variable-of form)
+                   (make-shared-var (shared-identity-of form)
+                                    lisp-decl-type decl-type)))
+            ((array-c-type? decl-type)
+             (when values-init-type
+               (error "Arrays cannot be assigned through (values)."))
+             (setf (gpu-variable-of form)
+                   (if init-form
+                       (ensure-gpu-var init-form)
+                       (make-local-var (name-of form) lisp-decl-type)))
+             (unless (array-var? (gpu-variable-of form))
+               (error "Must be an array variable: ~S" (unwalk-form form)))))
       decl-type))
 
   (:method ((form lexical-variable-binder-form) &key upper-type)

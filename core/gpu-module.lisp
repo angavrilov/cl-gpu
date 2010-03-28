@@ -50,9 +50,20 @@
    (static-asize   :documentation "Full dimension if all dims constant."))
   (:documentation "Common name of a global variable or parameter."))
 
-(def class* gpu-local-var (gpu-variable)
+(def class* gpu-lexical-var (gpu-variable)
+  ()
+  (:documentation "A lexical variable in a GPU function."))
+
+(def class* gpu-local-var (gpu-lexical-var)
   ()
   (:documentation "A local variable in a GPU function."))
+
+(def class* gpu-shared-identity (save-slots-mixin)
+  ((name           :documentation "Lisp name of the shared variable")))
+
+(def class* gpu-shared-var (gpu-lexical-var)
+  ((identity       :documentation "Identity of the variable"))
+  (:documentation "A shared local variable in a GPU function."))
 
 (def generic array-var? (obj)
   (:method ((obj gpu-variable)) (dimension-mask-of obj)))
@@ -119,7 +130,9 @@
    (form           :documentation "Walker form tree for the code.")
    (body           :documentation "Body string")
    (unique-name-tbl (make-c-name-table)
-                    :documentation "A hash table used to generate unique C ids."))
+                    :documentation "A hash table used to generate unique C ids.")
+   (shared-vars    nil
+                   :documentation "List of shared variables."))
   (:documentation "A function usable on the GPU"))
 
 (def class* gpu-kernel (gpu-function)
