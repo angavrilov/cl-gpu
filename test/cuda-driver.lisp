@@ -191,6 +191,17 @@
   (with-fixture cuda-context
     (test/translator/compute :cuda)))
 
+(def test test/cuda-driver/thread-idx ()
+  (with-fixture cuda-context
+    (with-test-gpu-module :cuda
+        ((:variable idxset (array uint32 (4 4)))
+         (:kernel kernel ()
+           (setf (aref idxset thread-idx-y thread-idx-x)
+                 (+ (* thread-cnt-x thread-idx-y) thread-idx-x))))
+      (is (zero-buffer? idxset))
+      (kernel :thread-cnt-x 4 :thread-cnt-y 4)
+      (is (index-buffer? idxset)))))
+
 (def function cuda-allocate-dummy-block ()
   (make-cuda-array 10)
   (values nil nil nil nil nil))

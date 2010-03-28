@@ -241,8 +241,9 @@
            (let ((,fobj (fun-obj-of ,kernel)))
              (declare (type cuda-function ,fobj))
              (lambda (,@rq-arg-names &key
-                 ((:block-x ,bx) 1) ((:block-y ,by) 1) ((:block-z ,bz) 1)
-                 ((:grid-x ,gx) 1) ((:grid-y ,gy) 1) ,@key-arg-specs
+                 ((:thread-cnt-x ,bx) 1) ((:thread-cnt-y ,by) 1)
+                 ((:thread-cnt-z ,bz) 1) ((:block-cnt-x ,gx) 1)
+                 ((:block-cnt-y ,gy) 1) ,@key-arg-specs
                  ,@(if aux-arg-specs `(&aux ,@aux-arg-specs)))
                (let* ((,fhandle (cuda-function-ensure-handle ,fobj)))
                  (with-cuda-context ((cuda-function-context ,fobj))
