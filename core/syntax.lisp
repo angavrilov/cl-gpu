@@ -181,6 +181,23 @@
            ,@kernel-defs
            ',name)))))
 
+(def function wrap-gpu-module-bindings (module instance code)
+  (with-unique-names (gpu-instance gpu-items)
+    (bind ((field-defs
+            (loop for var in (globals-of module)
+               collect `(,(name-of var)
+                          (gpu-global-value (svref ,gpu-items ,(index-of var))))))
+           (kernel-defs
+            (loop for knl in (kernels-of module)
+               collect `(,(name-of knl) (&rest args)
+                          (apply (svref ,gpu-items ,(index-of knl)) args)))))
+      `(let* ((,gpu-instance (get-module-instance ,instance))
+              (,gpu-items (gpu-module-instance-item-vector ,gpu-instance)))
+         (symbol-macrolet ,field-defs
+           (flet ,kernel-defs
+             (declare (inline ,@(mapcar #'name-of (kernels-of module))))
+             ,@code))))))
+
 (def (macro e) with-gpu-module (name-or-spec &body code &environment env)
   "Makes variables and kernels of the module accessible in the lexical scope."
   (bind (((:values module own-module?)
@@ -204,21 +221,9 @@
              (error "Invalid GPU module: ~S" name-or-spec)))))
     (when own-module?
       (compile-gpu-module module))
-    (with-unique-names (gpu-instance gpu-items)
-      (bind ((field-defs
-              (loop for var in (globals-of module)
-                 collect `(,(name-of var)
-                            (gpu-global-value (svref ,gpu-items ,(index-of var))))))
-             (kernel-defs
-              (loop for knl in (kernels-of module)
-                 collect `(,(name-of knl) (&rest args)
-                            (apply (svref ,gpu-items ,(index-of knl)) args)))))
-        `(let* ((,gpu-instance (get-module-instance
-                                ,(if own-module?
-                                     `(load-time-value (gpu-module-key (finalize-gpu-module ,module)))
-                                     `(quote ,(name-of module)))))
-                (,gpu-items (gpu-module-instance-item-vector ,gpu-instance)))
-           (symbol-macrolet ,field-defs
-             (flet ,kernel-defs
-               (declare (inline ,@(mapcar #'name-of (kernels-of module))))
-               ,@code)))))))
+    (wrap-gpu-module-bindings
+     module
+     (if own-module?
+         `(load-time-value (gpu-module-key (finalize-gpu-module ,module)))
+         `(quote ,(name-of module)))
+     code)))
