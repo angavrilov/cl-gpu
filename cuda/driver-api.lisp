@@ -212,8 +212,8 @@
   (thread nil)
   (blocks (make-weak-set) :read-only t)
   (modules nil)
-  (module-hash (make-weak-hash-table :test #'eq :weakness :key
-                                     :weakness-matters nil)
+  (module-hash #-ecl (make-weak-hash-table :test #'eq :weakness :key)
+               #+ecl (make-hash-table :test #'eq)
                :read-only t)
   (reg-count 0)
   (warp-size 0)
