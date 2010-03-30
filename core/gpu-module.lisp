@@ -155,6 +155,8 @@
                               (function ,(invoker-form-of object))))
                 init))))
 
+(defparameter *cur-gpu-module* nil)
+
 (def class* gpu-module (save-slots-mixin)
   ((name            :documentation "Lisp name of the module")
    (globals         :documentation "List of global variables")
@@ -165,7 +167,9 @@
    (unique-name-tbl (make-c-name-table)
                     :documentation "A hash table used to generate unique C ids.")
    (change-sentinel (cons t nil)
-                    :documentation "Used to trigger module reloads"))
+                    :documentation "Used to trigger module reloads")
+   (error-table     nil
+                    :documentation "Table of errors that may be thrown by the module."))
   (:documentation "A module that can be loaded to the GPU."))
 
 (def constructor gpu-module
@@ -245,7 +249,8 @@
                                        :functions (functions-of module)
                                        :kernels (kernels-of module)
                                        :compiled-code (compiled-code-of module)
-                                       :unique-name-tbl (unique-name-tbl-of module))
+                                       :unique-name-tbl (unique-name-tbl-of module)
+                                       :error-table (error-table-of module))
                 (setf (find-gpu-module (name-of module)) module)))
           module)
     (reindex-gpu-module it)
@@ -253,11 +258,12 @@
       (setf (index-table-of module) (index-table-of it)))))
 
 (def function compile-gpu-module (module)
-  (with-current-target
-    (compile-object module))
-  (reindex-gpu-module module)
-  (with-current-target
-    (post-compile-object module))
+  (let ((*cur-gpu-module* module))
+    (with-current-target
+      (compile-object module))
+    (reindex-gpu-module module)
+    (with-current-target
+      (post-compile-object module)))
   module)
 
 ;;; Instance management

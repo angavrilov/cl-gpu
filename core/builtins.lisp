@@ -174,9 +174,10 @@
                    (code "if ")
                    (emit-separated stream checks " || ")
                    (code " ")
-                   (emit-abort-command stream "Bad ~A index ~#@{~A ~} for dims ~#@{~A ~} of ~S"
-                                       (append (list (operator-of form) i) idxinfos
-                                               (list i) diminfos (list (name-of var))))
+                   (emit-abort-command stream "Bad index ~A for dims ~A in ~S"
+                                       (list `(list ,@idxinfos) `(list ,@diminfos)
+                                             `(quote (,(operator-of form) ,(name-of var)
+                                                       ,@(mapcar #'unwalk-form indexes)))))
                    (force-emit-merged-assignment stream form 0
                                                  (with-output-to-string (sv)
                                                    (emit-aref-expr sv prefix access-base-fun
@@ -262,8 +263,9 @@
             (when (> access-range 1)
               (code "||(IDX+" (1- access-range) ")>=EXT"))
             (code ") ")
-            (emit-abort-command stream "Bad ~A index ~A (extent ~A of ~S)"
-                                (list (operator-of form) '(:uint32 "IDX") '(:uint32 "EXT") (name-of var)))
+            (emit-abort-command stream "Bad index ~A for extent ~A in ~S"
+                                (list '(:uint32 "IDX") '(:uint32 "EXT")
+                                      `(quote (,(operator-of form) ,(name-of var) ,(unwalk-form index)))))
             (force-emit-merged-assignment stream form 0
                                           (format nil "(~A(~A+IDX))" prefix refname))
             (when value

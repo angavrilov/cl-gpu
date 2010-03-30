@@ -13,7 +13,7 @@
   "GPU pointer size in bytes.")
 
 (defvar *nvcc* "nvcc")
-(defvar *nvcc-flags* "")
+(defvar *nvcc-flags* "-arch sm_11")
 (defvar *nvcc-cubin* nil)
 
 (defvar *print-kernel-code* nil)

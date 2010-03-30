@@ -58,6 +58,12 @@
 (def layered-method generate-c-code :in cuda-target ((obj gpu-shared-var))
   (concatenate 'string "__shared__ " (call-next-method)))
 
+(def layered-method generate-c-code :in cuda-target ((obj gpu-module))
+  (if (error-table-of obj)
+      (format nil "__constant__ struct { unsigned group; unsigned *buffer; } GPU_ERR_BUF;~%~%~A"
+              (call-next-method))
+      (call-next-method)))
+
 ;;; C types
 
 (def layered-method c-type-string :in cuda-target (type)
@@ -98,10 +104,67 @@
 
 ;;; Abort command
 
+(def function transform-abort-args (args)
+  (let ((idx 0)
+        (size 0)
+        (types nil)
+        (vals nil))
+    (labels ((add-item (type value)
+               (let* ((tsize (foreign-type-size type))
+                      (tcount (floor (+ tsize 3) 4)))
+                 (prog1
+                     `(elt error-data ,idx)
+                   (push type types)
+                   (push (list size type value) vals)
+                   (incf idx)
+                   (incf size tcount))))
+             (handle (arg)
+               (cond ((typep arg 'walked-form)
+                      (add-item (form-c-type-of arg) arg))
+                     ((and (consp arg)
+                           (keywordp (first arg)))
+                      (add-item (first arg) (second arg)))
+                     ((and (consp arg)
+                           (eq (first arg) 'list))
+                      `(list ,@(mapcar #'handle (rest arg))))
+                     ((and (consp arg)
+                           (eq (first arg) 'quote))
+                      arg)
+                     (t
+                      `(quote ,arg)))))
+      (let ((exprs (mapcar #'handle args)))
+        (values size (nreverse types) exprs (nreverse vals))))))
+
 (def layered-method emit-abort-command :in cuda-target (stream exception args)
-  (declare (ignore exception args))
-  (format stream "__trap();")
-  (emit-code-newline stream))
+  (with-c-code-emitter-lexicals (stream)
+    (if (is-optimize-level? 'debug 1)
+        (bind (((:values size types exprs vals) (transform-abort-args args))
+               (full-size (+ size 2))
+               (entry (list types `(error ',exception ,@exprs)))
+               (etable (error-table-of *cur-gpu-module*))
+               (err-id
+                (aif (rassoc entry etable :test #'equal)
+                     (first it)
+                     (aprog1 (1+ (reduce #'max etable :key #'first :initial-value 0))
+                       (push (list* it entry) (error-table-of *cur-gpu-module*))))))
+          (assert (< full-size 256))
+          (with-c-code-block (stream)
+            (code "if (GPU_ERR_BUF.buffer) ")
+            (with-c-code-block (stream)
+              (emit "unsigned EPOS = atomicAdd(GPU_ERR_BUF.buffer,~A)+1;" (1+ full-size))
+              (code #\Newline
+                    "if (EPOS<" (- +cuda-error-buf-size+ full-size) ") ")
+              (with-c-code-block (stream)
+                (code "GPU_ERR_BUF.buffer[EPOS+1]=GPU_ERR_BUF.group+" full-size ";" #\Newline)
+                (code "GPU_ERR_BUF.buffer[EPOS+2]=" err-id ";" #\Newline)
+                (dolist (item vals)
+                  (code "*(" (c-type-string (second item)) "*)(GPU_ERR_BUF.buffer+EPOS+"
+                        (+ 3 (first item)) ")=" (third item) ";" #\Newline))
+                (code "GPU_ERR_BUF.buffer[EPOS]=" +cuda-error-magic+ ";" #\Newline
+                      "__threadfence();")))
+            (code #\Newline "__trap();"))
+          (code #\Newline))
+        (code "__trap();" #\Newline))))
 
 ;;; Built-in functions
 

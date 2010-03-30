@@ -73,8 +73,11 @@
                      (cuda-error-string (error-code condition))
                      (method-name condition)))))
 
+(declaim (inline cuda-raise-error))
+
 (defun cuda-raise-error (method rv)
   (unless (eql rv :success)
+    (cuda-scan-error-buffer)
     (error 'cuda-driver-error :method method :error rv)))
 
 (defmacro cuda-invoke (method &rest args)
@@ -221,7 +224,9 @@
   (destroy-queue nil)
   (can-map? nil)
   (host-blocks (make-weak-set) :read-only t)
-  (cleanup-queue nil))
+  (cleanup-queue nil)
+  (error-buffer nil)
+  (next-error-group 0))
 
 (defstruct cuda-function
   "CUDA Kernel handle wrapper"
@@ -242,7 +247,9 @@
   (source nil)
   (vars nil)
   (texrefs nil)
-  (functions nil))
+  (functions nil)
+  (error-group nil)
+  (error-table nil))
 
 (defstruct (cuda-linear (:include counted-block))
   "CUDA linear block wrapper"
@@ -341,6 +348,8 @@
                                                                device :can-map-host-memory))))))
         (push context *cuda-context-list*)
         (push context (gethash thread *cuda-thread-contexts*))
+        (when (cuda-context-can-map? context)
+          (setf (cuda-context-error-buffer context) (cuda-alloc-error-buffer)))
         context))))
 
 (def (function e) cuda-destroy-context (context)
@@ -778,6 +787,20 @@
   (dolist (fun (cuda-module-functions module))
     (setf (cuda-function-handle fun) nil)))
 
+(def function %cuda-module-init-errors (context module)
+  (let ((var (ignore-errors (cuda-module-get-var module "GPU_ERR_BUF")))
+        (buf (cuda-context-error-buffer context)))
+    (when var
+      (if buf
+          (with-foreign-object (info :uint32 2)
+            (let ((group (incf (cuda-context-next-error-group context))))
+              (setf (cuda-module-error-group module) group)
+              (setf (mem-aref info :uint32 0) (ash group 8)))
+            (setf (mem-aref info :uint32 1)
+                  (cuda-linear-handle (cuda-map-host-blk buf)))
+            (cuda-invoke cuMemcpyHtoD (cuda-linear-handle var) info 8))
+          (cuda-invoke cuMemsetD32 (cuda-linear-handle var) 0 2)))))
+
 (def function cuda-load-module-pointer (source image-ptr &key max-registers threads-per-block optimization-level)
   (assert (cuda-valid-context-p (cuda-current-context)))
   (with-foreign-objects ((popts 'cuda-jit-option 3)
@@ -801,7 +824,8 @@
       (cuda-invoke cuModuleLoadDataEx pmodule image-ptr opt-cnt popts pvalues)
       (aprog1 (make-cuda-module :handle (mem-ref pmodule 'cuda-module-handle)
                                 :context context :source source)
-        (push it (cuda-context-modules context))))))
+        (push it (cuda-context-modules context))
+        (%cuda-module-init-errors context it)))))
 
 (def function cuda-load-module (source &rest args)
   (etypecase source
@@ -954,3 +978,58 @@
             (cuda-function-max-block-size object))
     (unless (cuda-function-handle object)
       (format stream " (DEAD)"))))
+
+;;; Error reporting
+
+(defconstant +cuda-error-magic+ #x7F8CDAE7) ; This value is an SNAN
+(defconstant +cuda-error-buf-size+ (/ 65536 4))
+
+(def function cuda-alloc-error-buffer ()
+  (aprog1
+      (cuda-alloc-host (* +cuda-error-buf-size+ 4) :flags :mapped)
+    (memset (cuda-host-blk-handle it) 0 (cuda-host-blk-size it))))
+
+(def function cuda-scan-error-buffer ()
+  (let* ((context (cuda-current-context))
+         (buffer (if context (cuda-context-error-buffer context)))
+         (int-size (foreign-type-size :uint32)))
+    ;; If the context has an error buffer
+    (when buffer
+      (let* ((ptr (cuda-host-blk-handle buffer))
+             (count (/ (cuda-host-blk-size buffer) int-size))
+             (used (min (mem-aref ptr :uint32 0) (1- count))))
+        (unwind-protect
+             ;; Scan the buffer for magic markers
+             (loop for i = 1 then (1+ i)
+                while (< i used)
+                when (= (mem-aref ptr :uint32 i) +cuda-error-magic+)
+                do (let* ((hdr (mem-aref ptr :uint32 (1+ i))) ; 4 byte int: GGGS
+                          (group (ash hdr -8))
+                          (size (logand hdr 255))
+                          (module (find group (cuda-context-modules context)
+                                        :key #'cuda-module-error-group)))
+                     (when (and module (<= (+ i size) used) (>= size 2))
+                       ;; Report a seemingly valid error entry
+                       (with-simple-restart (next-error "Proceed to the next error reported by GPU code.")
+                         (let* ((eid (mem-aref ptr :uint32 (+ i 2)))
+                                (einfo (assoc eid (cuda-module-error-table module))))
+                           (if einfo
+                               (let ((arg-data (loop
+                                                  for j = 3 then (1+ j)
+                                                  for type in (second einfo)
+                                                  for offset = (* int-size (+ i j))
+                                                  while (<= j size)
+                                                  collect (mem-ref ptr type offset)
+                                                  when (> (foreign-type-size type) 4) do (incf j))))
+                                 ;; Evaluate the error throw expression
+                                 (eval `(let ((error-data ,(coerce arg-data 'vector)))
+                                          ,(third einfo))))
+                               ;; Unknown code, report what we can
+                               (error "Unknown GPU error ~A with arguments: ~{~A(~A)~^ ~}"
+                                      eid
+                                      (loop for j from 3 to size
+                                         collect (mem-aref ptr :int32 (+ i j))
+                                         collect (mem-aref ptr :float (+ i j)))))))
+                       (incf i size))))
+          ;; Wipe the buffer to avoid reporting errors twice
+          (memset ptr 0 (cuda-host-blk-size buffer)))))))

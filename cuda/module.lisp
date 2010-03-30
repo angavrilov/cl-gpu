@@ -277,13 +277,14 @@
 (def layered-method load-gpu-module-instance :in cuda-target ((module gpu-module))
   (format t "Loading CUDA module ~A~%" (name-of module))
   (let* ((handle (cuda-load-module (compiled-code-of module)))
-         (module (make-cuda-module-instance :handle handle)))
-    (cuda-context-queue-finalizer (cuda-module-context handle) module handle)
-    module))
+         (instance (make-cuda-module-instance :handle handle)))
+    (cuda-context-queue-finalizer (cuda-module-context handle) instance handle)
+    (setf (cuda-module-error-table handle) (error-table-of module))
+    instance))
 
 (def layered-method upgrade-gpu-module-instance :in cuda-target ((module gpu-module) instance)
   (let ((old-handle (cuda-module-instance-handle instance)))
-    (cancel-finalization module)
+    (cancel-finalization instance)
     (cuda-unload-module old-handle)
     (let ((new-handle
            (loop
@@ -291,7 +292,8 @@
                 (format t "Reloading CUDA module ~A~%" (name-of module))
                 (return (cuda-load-module (compiled-code-of module)))))))
       (setf (cuda-module-instance-handle instance) new-handle)
-      (cuda-context-queue-finalizer (cuda-module-context new-handle) module new-handle))))
+      (setf (cuda-module-error-table new-handle) (error-table-of module))
+      (cuda-context-queue-finalizer (cuda-module-context new-handle) instance new-handle))))
 
 (def layered-method upgrade-gpu-module-instance :in cuda-target :around ((module gpu-module) instance)
   ;; Verify the context early
