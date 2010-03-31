@@ -285,7 +285,7 @@
 (def layered-method upgrade-gpu-module-instance :in cuda-target ((module gpu-module) instance)
   (let ((old-handle (cuda-module-instance-handle instance)))
     (cancel-finalization instance)
-    (cuda-unload-module old-handle)
+    (deallocate old-handle)
     (let ((new-handle
            (loop
               (with-simple-restart (retry-load "Retry loading the module")

@@ -16,8 +16,18 @@
   (refcnt 1 :type fixnum)
   (handle nil))
 
+(defgeneric invalidate (blk)
+  (:documentation "Invalidates the block handle")
+  (:method-combination progn :most-specific-last)
+  (:method progn ((blk t))
+    (cancel-finalization blk))
+  (:method progn ((blk counted-block))
+    (setf (counted-block-handle blk) nil)))
+
 (defgeneric deallocate (blk)
   (:documentation "Deallocates the block")
+  (:method :after ((blk t))
+    (invalidate blk))
   (:method :around ((blk counted-block))
     (if (counted-block-handle blk)
         (call-next-method)
@@ -157,9 +167,16 @@
   (size 0 :type fixnum :read-only t))
 
 (def method deallocate ((blk foreign-block))
-  (cancel-finalization blk)
-  (foreign-free (foreign-block-handle blk))
-  (setf (foreign-block-handle blk) nil))
+  (foreign-free (foreign-block-handle blk)))
+
+(def function alloc-foreign-block (foreign-type count &key initial-element)
+  (let* ((ptr (if initial-element
+                  (foreign-alloc foreign-type :count count :initial-element initial-element)
+                  (foreign-alloc foreign-type :count count)))
+         (blk (make-foreign-block :handle ptr
+                                  :size (* count (foreign-type-size foreign-type)))))
+    (finalize blk (lambda () (foreign-free ptr)))
+    blk))
 
 ;; The actual buffer:
 
@@ -177,17 +194,12 @@
     (error "Invalid foreign array type: ~S" (if ft-p foreign-type element-type)))
   (let* ((dims (ensure-list dims))
          (size (reduce #'* dims))
-         (elt-size (foreign-type-size foreign-type)))
-    (let* ((ptr (if initial-element
-                    (foreign-alloc foreign-type :count size :initial-element initial-element)
-                    (foreign-alloc foreign-type :count size)))
-           (blk (make-foreign-block :handle ptr
-                                    :size (* size elt-size)))
-           (buffer (make-instance 'foreign-array :blk blk :size size
-                                  :elt-type foreign-type :elt-size elt-size
-                                  :dims (to-uint32-vector dims))))
-      (finalize blk (lambda () (foreign-free ptr)))
-      (values buffer))))
+         (elt-size (foreign-type-size foreign-type))
+         (blk (alloc-foreign-block foreign-type size :initial-element initial-element))
+         (buffer (make-instance 'foreign-array :blk blk :size size
+                                :elt-type foreign-type :elt-size elt-size
+                                :dims (to-uint32-vector dims))))
+    (values buffer)))
 
 (def method buffer-displace ((buffer foreign-array) &key
                              byte-offset foreign-type size dimensions
