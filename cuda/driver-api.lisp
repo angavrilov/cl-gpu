@@ -208,6 +208,8 @@
 (defcfun "cuCtxDestroy" cuda-error
   (ctx cuda-context-handle))
 
+(defcfun "cuCtxSynchronize" cuda-error)
+
 (defstruct cuda-context
   "CUDA Context handle wrapper"
   (device nil :read-only t)
@@ -379,6 +381,9 @@
     (dolist (blk (weak-set-snapshot (cuda-context-host-blocks context)))
       (%cuda-host-blk-wipe-mappings blk :no-local t))
     nil))
+
+(def (function e) cuda-context-synchronize ()
+  (cuda-invoke cuCtxSynchronize))
 
 (def function cuda-context-queue-finalizer (context object queue-item)
   (assert queue-item)
