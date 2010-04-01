@@ -271,7 +271,8 @@
   (shadow-copy nil))
 
 (defstruct (cuda-static-blk (:include cuda-linear))
-  (module nil :type cuda-module :read-only t))
+  (module nil :type cuda-module :read-only t)
+  (name nil :type string :read-only t))
 
 (defstruct (cuda-host-blk (:include foreign-block))
   (context nil :type cuda-context :read-only t)
@@ -795,7 +796,7 @@
 (defmethod print-object ((object cuda-module) stream)
   (print-unreadable-object (object stream :identity t)
     (format stream "CUDA Module: ~S ~S"
-            (mapcar #'car (cuda-module-vars object))
+            (mapcar #'cuda-static-blk-name (cuda-module-vars object))
             (mapcar #'cuda-function-name
                     (cuda-module-functions object)))
     (unless (cuda-module-handle object)
@@ -807,10 +808,8 @@
 (def method invalidate progn ((module cuda-module))
   (deletef (cuda-context-modules (cuda-module-context module)) module)
   (with-deferred-actions (*cuda-context-wipe*)
-    (dolist (var (cuda-module-vars module))
-      (invalidate (cdr var)))
-    (dolist (fun (cuda-module-functions module))
-      (invalidate fun))))
+    (mapc #'invalidate (cuda-module-vars module))
+    (mapc #'invalidate (cuda-module-functions module))))
 
 (def function %cuda-module-init-errors (context module)
   (let ((var (ignore-errors (cuda-module-get-var module "GPU_ERR_BUF")))
@@ -868,19 +867,19 @@
 
 (def function cuda-module-get-var (module name)
   "Returns a linear block that describes a module-global variable."
-  (or (cdr (assoc name (cuda-module-vars module)
-                  :test #'string-equal))
+  (or (find name (cuda-module-vars module)
+            :key #'cuda-static-blk-name :test #'string-equal)
       (with-cuda-context ((cuda-module-context module))
         (let ((handle (cuda-module-ensure-handle module)))
           (with-foreign-objects ((paddr 'cuda-device-ptr)
                                  (psize :unsigned-int))
             (cuda-invoke cuModuleGetGlobal paddr psize handle name)
             (let* ((size (mem-ref psize :unsigned-int))
-                   (blk (make-cuda-static-blk :context *cuda-context* :module module
+                   (blk (make-cuda-static-blk :context *cuda-context* :module module :name name
                                               :size size :extent size
                                               :width size :pitch size :height 1
                                               :handle (mem-ref paddr 'cuda-device-ptr))))
-              (push (cons name blk) (cuda-module-vars module))
+              (push blk (cuda-module-vars module))
               (values blk)))))))
 
 ;;; Kernels
