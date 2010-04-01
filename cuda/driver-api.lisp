@@ -361,25 +361,7 @@
         (setf (cuda-context-error-buffer context) (cuda-alloc-error-buffer)))
       context)))
 
-(defparameter *cuda-context-wipe-mode* nil)
-(defparameter *cuda-context-wipe-queue* nil)
-
-(def macro with-deferred-invalidate (&body code)
-  `(let ((queue
-          (let ((*cuda-context-wipe-queue* nil)
-                (*cuda-context-wipe-mode* t))
-            ,@code
-            *cuda-context-wipe-queue*)))
-     (if *cuda-context-wipe-mode*
-         (nconcf *cuda-context-wipe-queue* queue)
-         (dolist (item queue)
-           (funcall item)))))
-
-(def macro defer-invalidate (&body code)
-  `(flet ((wipe () ,@code))
-     (if *cuda-context-wipe-mode*
-         (push #'wipe *cuda-context-wipe-queue*)
-         (wipe))))
+(defparameter *cuda-context-wipe* nil)
 
 (def (function e) cuda-destroy-context (context)
   (unless (cuda-context-handle context)
@@ -396,7 +378,7 @@
       (deletef *cuda-context-list* context)
       (deletef (gethash (current-thread) *cuda-thread-contexts*) context)
       ;; Wipe the memory handles
-      (with-deferred-invalidate
+      (with-deferred-actions (*cuda-context-wipe*)
         (dolist (obj (union (nconc (weak-set-snapshot (cuda-context-blocks context))
                                    (weak-set-snapshot (cuda-context-host-blocks context))
                                    (copy-list (cuda-context-modules context)))
@@ -649,11 +631,11 @@
 
 (def method invalidate progn ((blk cuda-linear))
   (setf (cuda-linear-wipe-cb blk) nil)
-  (defer-invalidate
+  (defer-action (*cuda-context-wipe*)
     (%cuda-linear-wipe-back-references blk))
   (aif (cuda-linear-shadow-copy blk)
        (invalidate it)
-       (defer-invalidate
+       (defer-action (*cuda-context-wipe*)
          (%cuda-linear-wipe-references blk))))
 
 (def method deallocate :around ((blk cuda-linear))
@@ -717,7 +699,7 @@
   (mapc #'invalidate (cuda-host-blk-mappings blk))
   (aif (cuda-host-blk-shadow-copy blk)
        (invalidate it)
-       (defer-invalidate
+       (defer-action (*cuda-context-wipe*)
          (%cuda-host-blk-wipe-mappings blk))))
 
 (def function %cuda-host-blk-wipe-mappings (blk &key (context (cuda-current-context)) no-local)
@@ -824,7 +806,7 @@
 
 (def method invalidate progn ((module cuda-module))
   (deletef (cuda-context-modules (cuda-module-context module)) module)
-  (with-deferred-invalidate
+  (with-deferred-actions (*cuda-context-wipe*)
     (dolist (var (cuda-module-vars module))
       (invalidate (cdr var)))
     (dolist (fun (cuda-module-functions module))

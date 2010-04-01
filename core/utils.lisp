@@ -85,6 +85,23 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
 (def macro adjust-parents ((accessor form))
   `(adjust-parents-to (,accessor ,form) ,form))
 
+(def macro with-deferred-actions ((name) &body code)
+  "Defers actions via special variable name until exit from the outermost defer block."
+  (with-unique-names (old-queue)
+    `(let* ((,old-queue ,name)
+            (,name (or ,old-queue (cons 'deferred nil))))
+       ,@code
+       (unless ,old-queue
+         (dolist (item (cdr ,name))
+           (funcall item))))))
+
+(def macro defer-action ((name) &body code)
+  "When used in context of with-deferred-actions, postpones the code."
+  `(flet ((action () ,@code))
+     (if ,name
+         (push #'action (cdr ,name))
+         (action))))
+
 ;;; A helper for externalizable objects
 
 (def function object-slots-excluding (object &rest names)
