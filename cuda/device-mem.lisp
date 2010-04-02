@@ -98,46 +98,54 @@
                      :strides (to-uint32-vector (compute-linear-strides blk dimensions
                                                                         elt-size pitch-level))))))
 
+(def macro with-cuda-array-ref (((blk-var pos-var) buffer index &key (msg "copying data")) &body code)
+  (with-unique-names (log-offset-var)
+    (let ((inner
+           `(with-slots ((,blk-var blk) (,log-offset-var log-offset) elt-size) ,buffer
+              (let ((,pos-var (+ (* ,index elt-size) ,log-offset-var)))
+                ,@code))))
+      (if msg
+          `(with-cuda-recover (,msg) ,inner)
+          inner))))
+
 (def method row-major-bref ((buffer cuda-mem-array) index)
-  (with-slots (blk log-offset elt-type elt-size) buffer
-    (with-foreign-object (tmp elt-type)
-      (%cuda-linear-dh-transfer blk tmp (+ (* index elt-size) log-offset) elt-size t)
-      (mem-ref tmp elt-type))))
+  (with-slots (elt-type) buffer
+    (with-cuda-array-ref ((blk pos) buffer index :msg "reading the buffer element")
+      (with-foreign-object (tmp elt-type)
+        (%cuda-linear-dh-transfer blk tmp pos elt-size t)
+        (mem-ref tmp elt-type)))))
 
 (def method (setf row-major-bref) (value (buffer cuda-mem-array) index)
-  (with-slots (blk log-offset elt-type elt-size) buffer
-    (with-foreign-object (tmp elt-type)
-      (prog1
-          (setf (mem-ref tmp elt-type) value)
-        (%cuda-linear-dh-transfer blk tmp (+ (* index elt-size) log-offset) elt-size nil)))))
+  (with-slots (elt-type) buffer
+    (with-cuda-array-ref ((blk pos) buffer index :msg "writing the buffer element")
+      (with-foreign-object (tmp elt-type)
+        (prog1
+            (setf (mem-ref tmp elt-type) value)
+          (%cuda-linear-dh-transfer blk tmp pos elt-size nil))))))
 
 (def method buffer-fill ((buffer cuda-mem-array) value &key start end)
   (with-slots (blk log-offset elt-type elt-size) buffer
-    (let ((count (- end start)))
-      (if (eql value 0) ; Fill with 0 in binary mode, so that it
-                        ; works with any type
-          (%cuda-linear-memset blk (* start elt-size) (* count elt-size) :uint8 0 :offset log-offset)
-          (%cuda-linear-memset blk start count elt-type value :offset log-offset)))))
+    (with-cuda-recover ("filling the buffer")
+      (let ((count (- end start)))
+        (if (eql value 0)     ; Fill with 0 in binary mode, so that it
+                              ; works with any type
+            (%cuda-linear-memset blk (* start elt-size) (* count elt-size) :uint8 0 :offset log-offset)
+            (%cuda-linear-memset blk start count elt-type value :offset log-offset))))))
 
 (def method %copy-buffer-data ((src array) (dst cuda-mem-array) src-offset dst-offset count)
-  (with-slots (blk log-offset elt-size) dst
-    (with-pointer-to-array (ptr src)
-      (%cuda-linear-dh-transfer blk (inc-pointer ptr (* src-offset elt-size))
-                                (+ (* dst-offset elt-size) log-offset)
-                                (* count elt-size) nil))))
+  (with-cuda-array-ref ((d-blk d-pos) dst dst-offset)
+    (with-lisp-array-ref ((s-ptr) src src-offset elt-size)
+      (%cuda-linear-dh-transfer d-blk s-ptr d-pos (* count elt-size) nil))))
 
 (def method %copy-buffer-data ((src cuda-mem-array) (dst array) src-offset dst-offset count)
-  (with-slots (blk log-offset elt-size) src
-    (with-pointer-to-array (ptr dst)
-      (%cuda-linear-dh-transfer blk (inc-pointer ptr (* dst-offset elt-size))
-                                (+ (* src-offset elt-size) log-offset)
-                                (* count elt-size) t))))
+  (with-cuda-array-ref ((s-blk s-pos) src src-offset)
+    (with-lisp-array-ref ((d-ptr) dst dst-offset elt-size)
+      (%cuda-linear-dh-transfer s-blk d-ptr s-pos (* count elt-size) t))))
 
 (def method %copy-buffer-data ((src cuda-mem-array) (dst cuda-mem-array) src-offset dst-offset count)
-  (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
-    (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
-      (when (eql (%cuda-linear-dd-transfer s-blk (+ (* src-offset elt-size) s-log-offset)
-                                           d-blk (+ (* dst-offset elt-size) d-log-offset)
+  (with-cuda-array-ref ((s-blk s-pos) src src-offset)
+    (with-cuda-array-ref ((d-blk d-pos) dst dst-offset :msg nil)
+      (when (eql (%cuda-linear-dd-transfer s-blk s-pos d-blk d-pos
                                            (* count elt-size)
                                            :return-if-mismatch :misaligned)
                  :misaligned)
@@ -145,22 +153,14 @@
         (call-next-method)))))
 
 (def method %copy-buffer-data ((src foreign-array) (dst cuda-mem-array) src-offset dst-offset count)
-  (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
-    (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
-      (%cuda-linear-dh-transfer d-blk
-                                (inc-pointer (foreign-block-handle s-blk)
-                                             (+ (* src-offset elt-size) s-log-offset))
-                                (+ (* dst-offset elt-size) d-log-offset)
-                                (* count elt-size) nil))))
+  (with-cuda-array-ref ((d-blk d-pos) dst dst-offset)
+    (with-foreign-array-ref ((s-ptr) src src-offset)
+      (%cuda-linear-dh-transfer d-blk s-ptr d-pos (* count elt-size) nil))))
 
 (def method %copy-buffer-data ((src cuda-mem-array) (dst foreign-array) src-offset dst-offset count)
-  (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
-    (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
-      (%cuda-linear-dh-transfer s-blk
-                                (inc-pointer (foreign-block-handle d-blk)
-                                             (+ (* dst-offset elt-size) d-log-offset))
-                                (+ (* src-offset elt-size) s-log-offset)
-                                (* count elt-size) t))))
+  (with-cuda-array-ref ((s-blk s-pos) src src-offset)
+    (with-foreign-array-ref ((d-ptr) dst dst-offset)
+      (%cuda-linear-dh-transfer s-blk d-ptr s-pos (* count elt-size) t))))
 
 ;;; Host memory array
 

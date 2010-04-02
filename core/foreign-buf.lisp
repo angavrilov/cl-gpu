@@ -238,38 +238,32 @@
   (byte :int)
   (count :unsigned-int))
 
+(def macro with-foreign-array-ref (((ptr-var) buffer index) &body code)
+  (with-unique-names (blk-var log-offset-var)
+    `(with-slots ((,blk-var blk) (,log-offset-var log-offset) elt-size) ,buffer
+       (let ((,ptr-var (inc-pointer (foreign-block-handle ,blk-var)
+                                    (+ (* ,index elt-size) ,log-offset-var))))
+         ,@code))))
+
 (def method buffer-fill ((buffer foreign-array) value &key start end)
-  (with-slots (blk log-offset elt-type elt-size) buffer
+  (with-foreign-array-ref ((ptr) buffer start)
     (if (eql value 0)
-        (memset (inc-pointer (foreign-block-handle blk)
-                             (+ (* start elt-size) log-offset))
-                0
-                (* (- end start) elt-size))
-        (loop with base = (inc-pointer (foreign-block-handle blk) log-offset)
-           for i from start below end
-           do (setf (mem-aref base elt-type i) value)))))
+        (memset ptr 0 (* (- end start) elt-size))
+        (loop with elt-type = (slot-value buffer 'elt-type)
+           for i from 0 below (- end start)
+           do (setf (mem-aref ptr elt-type i) value)))))
 
 (def method %copy-buffer-data ((src array) (dst foreign-array) src-offset dst-offset count)
-  (with-slots (blk log-offset elt-size) dst
-    (with-pointer-to-array (ptr src)
-      (memcpy (inc-pointer (foreign-block-handle blk)
-                           (+ (* dst-offset elt-size) log-offset))
-              (inc-pointer ptr (* src-offset elt-size))
-              (* count elt-size)))))
+  (with-foreign-array-ref ((d-ptr) dst dst-offset)
+    (with-lisp-array-ref ((s-ptr) src src-offset elt-size)
+      (memcpy d-ptr s-ptr (* count elt-size)))))
 
 (def method %copy-buffer-data ((src foreign-array) (dst array) src-offset dst-offset count)
-  (with-slots (blk log-offset elt-size) src
-    (with-pointer-to-array (ptr dst)
-      (memcpy (inc-pointer ptr (* dst-offset elt-size))
-              (inc-pointer (foreign-block-handle blk)
-                           (+ (* src-offset elt-size) log-offset))
-              (* count elt-size)))))
+  (with-foreign-array-ref ((s-ptr) src src-offset)
+    (with-lisp-array-ref ((d-ptr) dst dst-offset elt-size)
+      (memcpy d-ptr s-ptr (* count elt-size)))))
 
 (def method %copy-buffer-data ((src foreign-array) (dst foreign-array) src-offset dst-offset count)
-  (with-slots ((s-blk blk) (s-log-offset log-offset) elt-size) src
-    (with-slots ((d-blk blk) (d-log-offset log-offset)) dst
-      (memmove (inc-pointer (foreign-block-handle d-blk)
-                            (+ (* dst-offset elt-size) d-log-offset))
-               (inc-pointer (foreign-block-handle s-blk)
-                            (+ (* src-offset elt-size) s-log-offset))
-               (* count elt-size)))))
+  (with-foreign-array-ref ((s-ptr) src src-offset)
+    (with-foreign-array-ref ((d-ptr) dst dst-offset)
+      (memmove d-ptr s-ptr (* count elt-size)))))

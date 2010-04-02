@@ -273,6 +273,11 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
   `(let ((,ptr-var (make-pointer (%array-address ,arr))))
      ,@code))
 
+(def macro with-lisp-array-ref (((ptr-var) arr index elt-size) &body code)
+  `(with-pointer-to-array (,ptr-var ,arr)
+     (incf-pointer ,ptr-var (* ,index ,elt-size))
+     ,@code))
+
 (def (function e) write-array-bytes (array stream)
   "Write the contents of the array to a binary stream."
   #+ecl (write-sequence (ext:array-raw-data array) stream)
