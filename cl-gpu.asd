@@ -40,5 +40,5 @@
                              #+cuda (:file "pitched-copy" :depends-on ("driver-api"))
                              #+cuda (:file "device-mem" :depends-on ("driver-api" "pitched-copy"))
                              (:file "nvcc")
-                             #+cuda (:file "target" :depends-on ("driver-api"))
+                             #+cuda (:file "target" :depends-on ("driver-api" "nvcc"))
                              #+cuda (:file "module" :depends-on ("device-mem" "target" "nvcc"))))))

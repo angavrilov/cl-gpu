@@ -284,7 +284,7 @@
 (def function make-local-c-name (name)
   (unique-c-name name (unique-name-tbl-of *cur-gpu-function*)))
 
-(def function check-fixed-dims (dims)
+(def function check-fixed-dims (dims type-spec)
   (when (and dims (not (every #'numberp dims)))
     (error "Local arrays must have fixed dimensions: ~S" type-spec)))
 
@@ -293,7 +293,7 @@
       (if from-c-type?
           type-spec
           (parse-global-type type-spec))
-    (check-fixed-dims dims)
+    (check-fixed-dims dims type-spec)
     (make-instance 'gpu-local-var
                    :name name :c-name c-name
                    :item-type item-type :dimension-mask dims)))
@@ -302,7 +302,7 @@
   (or (find identity (shared-vars-of *cur-gpu-function*) :key #'identity-of)
       (multiple-value-bind (item-type dims)
           (if type-spec (parse-global-type type-spec) decl-type)
-        (check-fixed-dims dims)
+        (check-fixed-dims dims (or type-spec decl-type))
         (let* ((name (name-of identity))
                (var (make-instance 'gpu-shared-var :name name
                                    :c-name (make-local-c-name name)

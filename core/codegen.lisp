@@ -387,7 +387,7 @@
            (unless inside-block?
              (princ ")" stream)))))
 
-  (:method ((form multiple-value-setq-form) stream &key merged-index merged-node inside-block?)
+  (:method ((form multiple-value-setq-form) stream &key merged-index merged-node)
     (cond (merged-index
            (assert (is-merged-assignment? form))
            (awhen (and (>= merged-index 0)
