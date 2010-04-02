@@ -87,25 +87,34 @@
 
 (def class* cuda-dynarray-global (cuda-global-var)
   ((value    :type (or cuda-mem-array null) :initform nil)
-   (wipe-cb  :type function))
+   (wipe-cb  :type function)
+   (recover-cb :type function))
   (:documentation "A dynamic array module global"))
 
 (def constructor cuda-dynarray-global
-  (let* ((stub-buf (buffer-of -self-))
+  (let* ((my-blk (blk-of -self-))
+         (stub-buf (buffer-of -self-))
          (arg-buf (buffer-displace stub-buf :foreign-type :uint32 :size t)))
-    (buffer-fill stub-buf 0)
-    (setf (buffer-of -self-) arg-buf)
-    ;; Define a wipe callback
-    (setf (wipe-cb-of -self-)
-          (lambda (cur blk)
-            (when (and (cuda-linear-valid-p cur)
-                       (value-of -self-)
-                       (eq blk (slot-value (value-of -self-) 'blk)))
-              (setf (gpu-global-value -self-) nil)
-              (warn "Contents of global ~S were deallocated while in use."
-                    (name-of (var-decl-of -self-))))))
-    (setf (cuda-linear-wipe-cb (blk-of -self-))
-          (make-weak-pointer (wipe-cb-of -self-)))))
+    (flet ((wipe-cb (cur blk)
+             (when (and (cuda-linear-valid-p cur)
+                        (value-of -self-)
+                        (eq blk (slot-value (value-of -self-) 'blk)))
+               (setf (gpu-global-value -self-) nil)
+               (warn "Contents of global ~S were deallocated while in use."
+                     (name-of (var-decl-of -self-)))))
+           (recover-cb (cur target)
+             (declare (ignore cur target))
+             (aif (value-of -self-)
+                  (%upload-dynarray-descriptor arg-buf (var-decl-of -self-) it)
+                  (buffer-fill arg-buf 0))))
+      (buffer-fill stub-buf 0)
+      (setf (buffer-of -self-) arg-buf)
+      ;; Define a wipe callback
+      (setf (cuda-linear-wipe-cb my-blk)
+            (make-weak-pointer (setf (wipe-cb-of -self-) #'wipe-cb)))
+      ;; Define a recovery callback
+      (setf (cuda-linear-recover-cb my-blk)
+            (make-weak-pointer (setf (recover-cb-of -self-) #'recover-cb))))))
 
 (def method gpu-global-value ((obj cuda-dynarray-global))
   (value-of obj))

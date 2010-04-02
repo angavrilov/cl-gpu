@@ -251,7 +251,8 @@
   (texrefs nil)
   (functions nil)
   (error-group nil)
-  (error-table nil))
+  (error-table nil)
+  (flags nil))
 
 (defstruct (cuda-linear (:include counted-block))
   "CUDA linear block wrapper"
@@ -268,7 +269,10 @@
   (references nil)
   (weak-references (make-weak-set) :read-only t)
   (referenced-by (make-weak-set) :read-only t)
-  (shadow-copy nil))
+  ;; A copy made for the GC
+  (shadow-copy nil)
+  ;; A callback for post-reallocate data recovery.
+  (recover-cb nil))
 
 (defstruct (cuda-static-blk (:include cuda-linear))
   (module nil :type cuda-module :read-only t)
@@ -391,6 +395,44 @@
       (setf *cuda-context* nil))
     nil))
 
+(defparameter *cuda-context-reallocate* nil)
+
+(def method cuda-reallocate ((context cuda-context))
+  (unless (cuda-context-handle context)
+    (error "Context already destroyed."))
+  (warn "Context reallocation resets device memory buffers to zero.")
+  (with-lock-held (*cuda-context-lock*)
+    ;; Defer reference invalidation actions until the context is OK.
+    (with-deferred-actions (*cuda-context-wipe*)
+      (with-cuda-context (context)
+        ;; Likewise defer reinitialization actions.
+        (with-deferred-actions (*cuda-context-reallocate*)
+          ;; Invalidate objects in the destroy queue.
+          (dolist (obj (cuda-context-destroy-queue context))
+            (with-simple-restart (continue "Continue rebuilding the context.")
+              (invalidate obj)))
+          (setf (cuda-context-destroy-queue context) nil)
+          ;; Save the contents of host blocks and queue reinitialization.
+          (dolist (hbuf (weak-set-snapshot (cuda-context-host-blocks context)))
+            (let* ((size (foreign-block-size hbuf))
+                   (new-item (alloc-foreign-block :int8 size))
+                   (new-handle (foreign-block-handle new-item)))
+              (memcpy new-handle (foreign-block-handle hbuf) size)
+              (defer-action (*cuda-context-reallocate*)
+                ;; The hbuf handle changes before this point.
+                (memcpy (foreign-block-handle hbuf) new-handle size)
+                (deref-buffer new-item))))
+          ;; Re-create the context
+          (cuda-invoke cuCtxDestroy (cuda-context-handle context))
+          (setf (cuda-context-handle context)
+                (%cuda-create-context-handle (cuda-context-device context)
+                                             (cuda-context-init-flags context)))
+          ;; Reallocate the objects
+          (dolist (obj (nconc (weak-set-snapshot (cuda-context-blocks context))
+                              (weak-set-snapshot (cuda-context-host-blocks context))
+                              (copy-list (cuda-context-modules context))))
+            (cuda-reallocate obj)))))))
+
 (def (function e) cuda-context-synchronize ()
   (cuda-invoke cuCtxSynchronize))
 
@@ -407,12 +449,17 @@
        (with-simple-restart (continue "Continue destroying queued objects")
          (deallocate object))))
 
+(def function cuda-context-add-cleanup (context item)
+  (with-lock-held (*cuda-context-lock*)
+    (push item (cuda-context-cleanup-queue context))))
+
 (def function cuda-context-cleanup-queued-items (context)
-  (loop for object = (with-lock-held (*cuda-context-lock*)
-                       (pop (cuda-context-cleanup-queue context)))
-     while object do
+  (unless *cuda-context-wipe*
+    (loop for object = (with-lock-held (*cuda-context-lock*)
+                         (pop (cuda-context-cleanup-queue context)))
+       while object do
        (with-simple-restart (continue "Continue calling cleanup handlers")
-         (funcall object))))
+         (funcall object)))))
 
 ;;; Linear memory
 
@@ -556,6 +603,19 @@
     (unless (cuda-linear-handle object)
       (format stream " (DEAD)"))))
 
+(def function %cuda-alloc-linear-handle (width height pitch-for)
+  (if (and pitch-for (> height 1))
+      (with-foreign-objects ((phandle 'cuda-device-ptr)
+                             (ppitch :unsigned-int))
+        (cuda-invoke cuMemAllocPitch phandle ppitch
+                     width height pitch-for)
+        (values (mem-ref phandle 'cuda-device-ptr)
+                (mem-ref ppitch :unsigned-int)))
+      (with-foreign-object (phandle 'cuda-device-ptr)
+        (cuda-invoke cuMemAlloc phandle (* width height))
+        (values (mem-ref phandle 'cuda-device-ptr)
+                width))))
+
 (def function cuda-alloc-linear (width height &key pitch-for)
   (assert (and (> width 0) (> height 0)) (width height)
           "Invalid linear dimensions: ~A x ~A" width height)
@@ -564,17 +624,7 @@
         (size (* width height)))
     (cuda-context-destroy-queued-items context)
     (multiple-value-bind (handle pitch)
-        (if (and pitch-for (> height 1))
-            (with-foreign-objects ((phandle 'cuda-device-ptr)
-                                   (ppitch :unsigned-int))
-              (cuda-invoke cuMemAllocPitch phandle ppitch
-                           width height pitch-for)
-              (values (mem-ref phandle 'cuda-device-ptr)
-                      (mem-ref ppitch :unsigned-int)))
-            (with-foreign-object (phandle 'cuda-device-ptr)
-              (cuda-invoke cuMemAlloc phandle size)
-              (values (mem-ref phandle 'cuda-device-ptr)
-                      width)))
+        (%cuda-alloc-linear-handle width height pitch-for)
       (when (= pitch width)
         (setf pitch size width size height 1))
       (let ((blk (make-cuda-linear :context context :handle handle
@@ -586,8 +636,25 @@
         (weak-set-addf (cuda-context-blocks context) blk)
         blk))))
 
-(def method buffer-refcnt ((blk cuda-static-blk))
-  (if (cuda-linear-handle blk) t))
+(def function %cuda-linear-recover-or-wipe (field-fun blk ref &key silent)
+  (awhen (ensure-weak-pointer-value (funcall field-fun blk))
+    (with-simple-restart (continue "Simply fill the block with zeroes")
+      (return-from %cuda-linear-recover-or-wipe
+        (funcall it blk ref))))
+  (awhen (cuda-linear-handle blk)
+    (cuda-invoke cuMemsetD8 it 0 (cuda-linear-extent blk))
+    (unless (or silent *cuda-context-reallocate*)
+      (warn "Block wiped due to reference deletion or context reinitialization."))))
+
+(def method cuda-reallocate ((blk cuda-linear))
+  (setf (cuda-linear-handle blk)
+        (%cuda-alloc-linear-handle (cuda-linear-extent blk) 1 nil)))
+
+(def method cuda-reallocate :after ((blk cuda-linear))
+  (awhen (cuda-linear-shadow-copy blk)
+    (setf (cuda-linear-handle it) (cuda-linear-handle blk)))
+  (defer-action (*cuda-context-reallocate*)
+    (%cuda-linear-recover-or-wipe #'cuda-linear-recover-cb blk nil)))
 
 (def function cuda-linear-reference (blk target)
   (let ((crefs (cuda-linear-references blk))
@@ -609,31 +676,31 @@
       (deletef (cuda-linear-references blk) target :test #'eq)
       (deref-buffer target))))
 
-(def function %cuda-linear-wipe-back-references (blk)
-  ;; Wipe blocks that reference this one
+(def function %cuda-linear-wipe-reference (blk target)
+  (deletef (cuda-linear-references blk) target :test #'eq)
+  (weak-set-deletef (cuda-linear-weak-references blk) target)
+  (weak-set-deletef (cuda-linear-referenced-by target) blk)
+  (%cuda-linear-recover-or-wipe #'cuda-linear-wipe-cb blk target))
+
+(def function %cuda-linear-process-back-references (blk handler)
   (dolist (tgt (weak-set-snapshot (cuda-linear-referenced-by blk)))
-    (with-simple-restart (continue "Continue invoking wipe callbacks")
+    (with-simple-restart (continue "Continue fixing inter-block references")
       (when (member blk (cuda-linear-references tgt) :test #'eq)
-        (deletef (cuda-linear-references tgt) blk :test #'eq)
-        (weak-set-deletef (cuda-linear-weak-references tgt) blk)
-        (aif (ensure-weak-pointer-value (cuda-linear-wipe-cb tgt))
-             (funcall it tgt blk)
-             (awhen (cuda-linear-handle tgt)
-               (cuda-invoke cuMemsetD8 it 0 (cuda-linear-extent tgt))
-               (warn "Block deallocated while referenced, reference source wiped.")))))))
+        (funcall handler tgt blk)))))
 
 (def function %cuda-linear-wipe-references (blk)
   ;; Unreference blocks linked by this one
   (setf (cuda-linear-references blk)
         (weak-set-snapshot (cuda-linear-weak-references blk)))
   (dolist (tgt (cuda-linear-references blk))
-    (with-simple-restart (continue "Continue invoking wipe callbacks")
+    (with-simple-restart (continue "Continue removing inter-block references")
       (cuda-linear-unreference blk tgt))))
 
 (def method invalidate progn ((blk cuda-linear))
   (setf (cuda-linear-wipe-cb blk) nil)
+  (setf (cuda-linear-recover-cb blk) nil)
   (defer-action (*cuda-context-wipe*)
-    (%cuda-linear-wipe-back-references blk))
+    (%cuda-linear-process-back-references blk #'%cuda-linear-wipe-reference))
   (aif (cuda-linear-shadow-copy blk)
        (invalidate it)
        (defer-action (*cuda-context-wipe*)
@@ -670,6 +737,11 @@
   (ptr :pointer)
   (flags :unsigned-int))
 
+(def function %cuda-alloc-host-handle (size flags)
+  (with-foreign-object (pptr :pointer)
+    (cuda-invoke cuMemHostAlloc pptr size flags)
+    (mem-ref pptr :pointer)))
+
 (def function cuda-alloc-host (size &key flags)
   (assert (> size 0) (size)
           "Invalid host block size: ~A" size)
@@ -677,10 +749,7 @@
   (let ((context (cuda-current-context))
         (flags (ensure-list flags)))
     (cuda-context-destroy-queued-items context)
-    (let* ((ptr
-            (with-foreign-object (pptr :pointer)
-              (cuda-invoke cuMemHostAlloc pptr size flags)
-              (mem-ref pptr :pointer)))
+    (let* ((ptr (%cuda-alloc-host-handle size flags))
            (blk
             (make-cuda-host-blk :handle ptr :size size
                                 :context context
@@ -696,21 +765,23 @@
         (weak-set-addf (cuda-context-host-blocks context) blk))
       blk)))
 
-(def method invalidate progn ((blk cuda-host-blk))
-  (mapc #'invalidate (cuda-host-blk-mappings blk))
-  (aif (cuda-host-blk-shadow-copy blk)
-       (invalidate it)
-       (defer-action (*cuda-context-wipe*)
-         (%cuda-host-blk-wipe-mappings blk))))
+(def method cuda-reallocate ((blk cuda-host-blk))
+  (setf (cuda-host-blk-handle blk)
+        (%cuda-alloc-host-handle
+         (cuda-host-blk-size blk)
+         (append (if (cuda-host-blk-portable? blk) '(:portable))
+                 (if (cuda-host-blk-write-combine? blk) '(:write-combine))
+                 (if (cuda-host-blk-weak-mappings blk) '(:mapped)))))
+  (awhen (cuda-host-blk-shadow-copy blk)
+    (setf (cuda-host-blk-handle it) (cuda-host-blk-handle blk)))
+  (mapc #'cuda-reallocate (cuda-host-blk-mappings blk)))
 
-(def function %cuda-host-blk-wipe-mappings (blk &key (context (cuda-current-context)) no-local)
-  (dolist (item (cdr (cuda-host-blk-weak-mappings blk)))
-    (if (eq context (cuda-linear-context item))
-        (unless no-local
-          (%cuda-linear-wipe-references item))
-        (with-lock-held (*cuda-context-lock*)
-          (push (curry #'%cuda-linear-wipe-references item)
-                (cuda-context-cleanup-queue (cuda-linear-context item)))))))
+(def method invalidate progn ((blk cuda-host-blk))
+  (awhen (cuda-host-blk-shadow-copy blk)
+    (setf (cuda-host-blk-handle it) nil))
+  (mapc #'invalidate (if (cuda-host-blk-shadow-copy blk)
+                         (cuda-host-blk-mappings blk)
+                         (cdr (cuda-host-blk-weak-mappings blk)))))
 
 (def function cuda-host-blk-any-context (blk)
   (let ((context (cuda-host-blk-context blk)))
@@ -727,6 +798,11 @@
   (with-lock-held (*cuda-context-lock*)
     (weak-set-deletef (cuda-context-host-blocks (cuda-host-blk-context blk)) blk)))
 
+(def function %cuda-map-host-blk-handle (blk)
+  (with-foreign-objects ((paddr 'cuda-device-ptr))
+    (cuda-invoke cuMemHostGetDevicePointer paddr (cuda-host-blk-handle blk) 0)
+    (mem-ref paddr 'cuda-device-ptr)))
+
 (def function cuda-map-host-blk (blk)
   (or (find (cuda-current-context) (cuda-host-blk-mappings blk)
             :test #'eq :key #'cuda-linear-context)
@@ -734,21 +810,43 @@
         (unless (and (cuda-host-blk-weak-mappings blk)
                      (cuda-context-can-map? *cuda-context*))
           (error "Flag mismatch: cannot map ~S in context ~S" blk *cuda-context*))
-        (with-foreign-objects ((paddr 'cuda-device-ptr))
-          (cuda-invoke cuMemHostGetDevicePointer paddr (cuda-host-blk-handle blk) 0)
-          (let* ((size (cuda-host-blk-size blk))
-                 (mblk (make-cuda-mapped-blk :context *cuda-context* :root blk
-                                             :size size :extent size
-                                             :width size :pitch size :height 1
-                                             :handle (mem-ref paddr 'cuda-device-ptr)))
-                 (weak-mblk (copy-cuda-mapped-blk mblk)))
-            (setf (cuda-mapped-blk-root weak-mblk) nil)
-            (with-lock-held (*cuda-context-lock*)
-              (push mblk (cuda-host-blk-mappings blk))
-              (push weak-mblk (cdr (cuda-host-blk-weak-mappings blk))))
-            (values mblk))))))
+        (let* ((size (cuda-host-blk-size blk))
+               (handle (%cuda-map-host-blk-handle blk))
+               (mblk (make-cuda-mapped-blk :context *cuda-context* :root blk
+                                           :size size :extent size
+                                           :width size :pitch size :height 1
+                                           :handle handle
+                                           ;; This prevents the reallocate method for
+                                           ;; linear blocks from wiping the memory.
+                                           :recover-cb (constantly nil)))
+               (weak-mblk (copy-cuda-mapped-blk mblk)))
+          (setf (cuda-linear-shadow-copy mblk) weak-mblk)
+          (setf (cuda-mapped-blk-root weak-mblk) (cuda-host-blk-shadow-copy blk))
+          (with-lock-held (*cuda-context-lock*)
+            (push mblk (cuda-host-blk-mappings blk))
+            (push weak-mblk (cdr (cuda-host-blk-weak-mappings blk))))
+          (values mblk)))))
 
 (delegate-buffer-refcnt (blk cuda-mapped-blk) (cuda-mapped-blk-root blk))
+
+(macrolet ((defer (method)
+             `(def method ,method :around ((blk cuda-mapped-blk))
+                (if (eq (cuda-linear-context blk) (cuda-current-context))
+                    (call-next-method)
+                    (progn
+                      (setf (cuda-linear-handle blk) nil)
+                      (defer-action (*cuda-context-wipe*)
+                        (cuda-context-add-cleanup (cuda-linear-context blk)
+                                                  (curry #',method blk))))))))
+  (defer invalidate)
+  (defer cuda-reallocate))
+
+(def method cuda-reallocate ((blk cuda-mapped-blk))
+  (let ((root (cuda-mapped-blk-root blk)))
+    (setf (cuda-linear-handle blk) (%cuda-map-host-blk-handle root))
+    (unless (eq (cuda-linear-context blk) (cuda-host-blk-context root))
+      (%cuda-linear-process-back-references
+       blk (curry #'%cuda-linear-recover-or-wipe #'cuda-linear-recover-cb)))))
 
 ;;; CUDA Modules
 
@@ -815,48 +913,61 @@
   (let ((var (ignore-errors (cuda-module-get-var module "GPU_ERR_BUF")))
         (buf (cuda-context-error-buffer context)))
     (when var
-      (if buf
-          (with-foreign-object (info :uint32 2)
-            (let ((group (incf (cuda-context-next-error-group context))))
-              (setf (cuda-module-error-group module) group)
-              (setf (mem-aref info :uint32 0) (ash group 8)))
-            (setf (mem-aref info :uint32 1)
-                  (cuda-linear-handle (cuda-map-host-blk buf)))
-            (cuda-invoke cuMemcpyHtoD (cuda-linear-handle var) info 8))
-          (cuda-invoke cuMemsetD32 (cuda-linear-handle var) 0 2)))))
+      (when buf
+        (setf (cuda-linear-recover-cb var)
+              (lambda (var ref)
+                (declare (ignore ref))
+                (with-foreign-object (info :uint32 2)
+                  (let ((group (incf (cuda-context-next-error-group context))))
+                    (setf (cuda-module-error-group module) group)
+                    (setf (mem-aref info :uint32 0) (ash group 8)))
+                  (setf (mem-aref info :uint32 1)
+                        (cuda-linear-ensure-handle (cuda-map-host-blk buf)))
+                  (cuda-invoke cuMemcpyHtoD (cuda-linear-handle var) info 8)))))
+      (%cuda-linear-recover-or-wipe #'cuda-linear-recover-cb var nil :silent t))))
 
-(def function cuda-load-module-pointer (source image-ptr &key max-registers threads-per-block optimization-level)
-  (assert (cuda-valid-context-p (cuda-current-context)))
-  (with-foreign-objects ((popts 'cuda-jit-option 3)
-                         (pvalues :pointer 3)
-                         (pmax :int) (pthreads :int) (poptlev :int)
-                         (pmodule 'cuda-module-handle))
-    (let ((context (cuda-current-context))
-          (opt-cnt 0))
-      (cuda-context-destroy-queued-items context)
-      (flet ((add-option (code type ptr value)
-               (setf (mem-ref ptr type) value
-                     (mem-aref pvalues :pointer opt-cnt) ptr
-                     (mem-aref popts 'cuda-jit-option opt-cnt) code
-                     opt-cnt (1+ opt-cnt))))
-        (when max-registers
-          (add-option :max-registers :int pmax max-registers))
-        (when threads-per-block
-          (add-option :threads-per-block :int pthreads threads-per-block))
-        (when optimization-level
-          (add-option :optimization-level :int poptlev optimization-level)))
-      (cuda-invoke cuModuleLoadDataEx pmodule image-ptr opt-cnt popts pvalues)
-      (aprog1 (make-cuda-module :handle (mem-ref pmodule 'cuda-module-handle)
-                                :context context :source source)
-        (push it (cuda-context-modules context))
-        (%cuda-module-init-errors context it)))))
+(def function %cuda-load-module-handle (source &key max-registers threads-per-block optimization-level)
+  (flet ((do-load (image-ptr)
+           (with-foreign-objects ((popts 'cuda-jit-option 3)
+                                  (pvalues :pointer 3)
+                                  (pmax :int) (pthreads :int) (poptlev :int)
+                                  (pmodule 'cuda-module-handle))
+             (let ((opt-cnt 0))
+               (flet ((add-option (code type ptr value)
+                        (setf (mem-ref ptr type) value
+                              (mem-aref pvalues :pointer opt-cnt) ptr
+                              (mem-aref popts 'cuda-jit-option opt-cnt) code
+                              opt-cnt (1+ opt-cnt))))
+                 (when max-registers
+                   (add-option :max-registers :int pmax max-registers))
+                 (when threads-per-block
+                   (add-option :threads-per-block :int pthreads threads-per-block))
+                 (when optimization-level
+                   (add-option :optimization-level :int poptlev optimization-level)))
+               (cuda-invoke cuModuleLoadDataEx pmodule image-ptr opt-cnt popts pvalues)
+               (values (mem-ref pmodule 'cuda-module-handle))))))
+    (etypecase source
+      (string (with-foreign-string (ptr source)
+                (do-load ptr)))
+      (array (with-pointer-to-array (ptr source)
+               (do-load ptr))))))
 
 (def function cuda-load-module (source &rest args)
-  (etypecase source
-    (string (with-foreign-string (ptr source)
-              (apply #'cuda-load-module-pointer source ptr args)))
-    (array (with-pointer-to-array (ptr source)
-             (apply #'cuda-load-module-pointer source ptr args)))))
+  (assert (cuda-valid-context-p (cuda-current-context)))
+  (let* ((context (cuda-current-context)))
+    (cuda-context-destroy-queued-items context)
+    (aprog1 (make-cuda-module :handle (apply #'%cuda-load-module-handle source args)
+                              :context context :source source :flags args)
+      (push it (cuda-context-modules context))
+      (%cuda-module-init-errors context it))))
+
+(def method cuda-reallocate ((obj cuda-module))
+  (setf (cuda-module-handle obj)
+        (apply #'%cuda-load-module-handle
+               (cuda-module-source obj)
+               (cuda-module-flags obj)))
+  (mapc #'cuda-reallocate (cuda-module-vars obj))
+  (mapc #'cuda-reallocate (cuda-module-functions obj)))
 
 (def method deallocate :around ((module cuda-module))
   (with-cuda-context ((cuda-module-context module))
@@ -865,22 +976,34 @@
 (def method deallocate ((module cuda-module))
   (cuda-invoke cuModuleUnload (cuda-module-handle module)))
 
+(def function %cuda-module-get-var-handle (module name)
+  (let ((handle (cuda-module-ensure-handle module)))
+    (with-foreign-objects ((paddr 'cuda-device-ptr)
+                           (psize :unsigned-int))
+      (cuda-invoke cuModuleGetGlobal paddr psize handle name)
+      (values (mem-ref paddr 'cuda-device-ptr)
+              (mem-ref psize :unsigned-int)))))
+
 (def function cuda-module-get-var (module name)
   "Returns a linear block that describes a module-global variable."
   (or (find name (cuda-module-vars module)
             :key #'cuda-static-blk-name :test #'string-equal)
       (with-cuda-context ((cuda-module-context module))
-        (let ((handle (cuda-module-ensure-handle module)))
-          (with-foreign-objects ((paddr 'cuda-device-ptr)
-                                 (psize :unsigned-int))
-            (cuda-invoke cuModuleGetGlobal paddr psize handle name)
-            (let* ((size (mem-ref psize :unsigned-int))
-                   (blk (make-cuda-static-blk :context *cuda-context* :module module :name name
-                                              :size size :extent size
-                                              :width size :pitch size :height 1
-                                              :handle (mem-ref paddr 'cuda-device-ptr))))
-              (push blk (cuda-module-vars module))
-              (values blk)))))))
+        (bind (((:values handle size) (%cuda-module-get-var-handle module name))
+               (blk (make-cuda-static-blk :context *cuda-context* :module module :name name
+                                          :size size :extent size
+                                          :width size :pitch size :height 1
+                                          :handle handle)))
+          (push blk (cuda-module-vars module))
+          (values blk)))))
+
+(def method buffer-refcnt ((blk cuda-static-blk))
+  (if (cuda-linear-handle blk) t))
+
+(def method cuda-reallocate ((blk cuda-static-blk))
+  (setf (cuda-linear-handle blk)
+        (%cuda-module-get-var-handle (cuda-static-blk-module blk)
+                                     (cuda-static-blk-name blk))))
 
 ;;; Kernels
 
@@ -955,25 +1078,33 @@
     (cuda-invoke cuFuncGetAttribute tmp attr fhandle)
     (mem-ref tmp :int)))
 
+(def function %cuda-module-get-function-handle (module name)
+  (let ((handle (cuda-module-ensure-handle module)))
+    (with-foreign-object (pfun 'cuda-kernel-handle)
+      (cuda-invoke cuModuleGetFunction pfun handle name)
+      (mem-ref pfun 'cuda-kernel-handle))))
+
 (def function cuda-module-get-function (module name)
   "Returns a function object for a kernel."
   (or (find name (cuda-module-functions module)
             :key #'cuda-function-name)
       (with-cuda-context ((cuda-module-context module))
-        (let ((handle (cuda-module-ensure-handle module)))
-          (with-foreign-object (pfun 'cuda-kernel-handle)
-            (cuda-invoke cuModuleGetFunction pfun handle name)
-            (let* ((handle (mem-ref pfun 'cuda-kernel-handle))
-                   (fun (make-cuda-function
-                         :context *cuda-context* :module module
-                         :name name :handle handle
-                         :num-regs (cuda-func-attr handle :num-regs)
-                         :shared-bytes (cuda-func-attr handle :shared-size-bytes)
-                         :local-bytes (cuda-func-attr handle :local-size-bytes)
-                         :const-bytes (cuda-func-attr handle :const-size-bytes)
-                         :max-block-size (cuda-func-attr handle :max-threads-per-block))))
-              (push fun (cuda-module-functions module))
-              (values fun)))))))
+        (let* ((handle (%cuda-module-get-function-handle module name))
+               (fun (make-cuda-function
+                     :context *cuda-context* :module module
+                     :name name :handle handle
+                     :num-regs (cuda-func-attr handle :num-regs)
+                     :shared-bytes (cuda-func-attr handle :shared-size-bytes)
+                     :local-bytes (cuda-func-attr handle :local-size-bytes)
+                     :const-bytes (cuda-func-attr handle :const-size-bytes)
+                     :max-block-size (cuda-func-attr handle :max-threads-per-block))))
+          (push fun (cuda-module-functions module))
+          (values fun)))))
+
+(def method cuda-reallocate ((obj cuda-function))
+  (setf (cuda-function-handle obj)
+        (%cuda-module-get-function-handle (cuda-function-module obj)
+                                          (cuda-function-name obj))))
 
 (def function cuda-function-ensure-handle (fun)
   (or (cuda-function-handle fun)
@@ -1047,5 +1178,12 @@
                                          collect (mem-aref ptr :int32 (+ i j))
                                          collect (mem-aref ptr :float (+ i j)))))))
                        (incf i size))))
-          ;; Wipe the buffer to avoid reporting errors twice
-          (memset ptr 0 (cuda-host-blk-size buffer)))))))
+          ;; Wipe the buffer to avoid reporting errors twice.
+          ;; Don't reuse ptr because the pointer can be changed
+          ;; by cuda context recovery restarts.
+          (memset (cuda-host-blk-handle buffer) 0 (cuda-host-blk-size buffer)))))))
+
+;;; Error recovery
+
+(def (function e) cuda-recover ()
+  (cuda-reallocate (cuda-current-context)))
