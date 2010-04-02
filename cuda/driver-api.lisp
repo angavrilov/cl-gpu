@@ -75,13 +75,34 @@
 
 (declaim (inline cuda-raise-error))
 
-(defun cuda-raise-error (method rv)
-  (unless (eql rv :success)
+(defparameter *cuda-return-code* nil)
+
+(defun cuda-report-errors (method rv)
+  (let ((*cuda-return-code* rv))
     (cuda-scan-error-buffer)
     (error 'cuda-driver-error :method method :error rv)))
 
+(defun cuda-raise-error (method rv)
+  (unless (eql rv :success)
+    (cuda-report-errors method rv)))
+
 (defmacro cuda-invoke (method &rest args)
   `(cuda-raise-error ',method (,method ,@args)))
+
+(def function report-cuda-r-retry (msg stream)
+  (format stream "Recover the CUDA context and retry ~A" msg))
+
+(defmacro with-cuda-recover ((retry-msg) &body code)
+  (with-unique-names (recover-block retry-tag)
+    `(block ,recover-block
+       (tagbody
+          ,retry-tag
+          (restart-bind ((recover-and-retry (lambda ()
+                                              (cuda-recover)
+                                              (go ,retry-tag))
+                           :report-function (curry #'report-cuda-r-retry ,retry-msg)
+                           :test-function #'cuda-may-recover?))
+            (return-from ,recover-block (progn ,@code)))))))
 
 ;;; Driver initialization
 
@@ -397,6 +418,12 @@
 
 (defparameter *cuda-context-reallocate* nil)
 
+(def function cuda-may-recover? (&rest stuff)
+  (declare (ignore stuff))
+  (and *cuda-return-code*
+       (cuda-current-context)
+       (null *cuda-context-reallocate*)))
+
 (def method cuda-reallocate ((context cuda-context))
   (unless (cuda-context-handle context)
     (error "Context already destroyed."))
@@ -624,7 +651,8 @@
         (size (* width height)))
     (cuda-context-destroy-queued-items context)
     (multiple-value-bind (handle pitch)
-        (%cuda-alloc-linear-handle width height pitch-for)
+        (with-cuda-recover ("allocating a linear block")
+          (%cuda-alloc-linear-handle width height pitch-for))
       (when (= pitch width)
         (setf pitch size width size height 1))
       (let ((blk (make-cuda-linear :context context :handle handle
@@ -711,7 +739,8 @@
     (call-next-method)))
 
 (def method deallocate ((blk cuda-linear))
-  (cuda-invoke cuMemFree (cuda-linear-handle blk))
+  (with-cuda-recover ("freeing a linear block")
+    (cuda-invoke cuMemFree (cuda-linear-handle blk)))
   (weak-set-deletef (cuda-context-blocks *cuda-context*) blk))
 
 (def method deallocate ((obj cuda-static-blk))
@@ -749,7 +778,8 @@
   (let ((context (cuda-current-context))
         (flags (ensure-list flags)))
     (cuda-context-destroy-queued-items context)
-    (let* ((ptr (%cuda-alloc-host-handle size flags))
+    (let* ((ptr (with-cuda-recover ("allocating a host block")
+                  (%cuda-alloc-host-handle size flags)))
            (blk
             (make-cuda-host-blk :handle ptr :size size
                                 :context context
@@ -794,7 +824,8 @@
     (call-next-method)))
 
 (def method deallocate ((blk cuda-host-blk))
-  (cuda-invoke cuMemFreeHost (cuda-host-blk-handle blk))
+  (with-cuda-recover ("freeing a host block")
+    (cuda-invoke cuMemFreeHost (cuda-host-blk-handle blk)))
   (with-lock-held (*cuda-context-lock*)
     (weak-set-deletef (cuda-context-host-blocks (cuda-host-blk-context blk)) blk)))
 
@@ -811,7 +842,8 @@
                      (cuda-context-can-map? *cuda-context*))
           (error "Flag mismatch: cannot map ~S in context ~S" blk *cuda-context*))
         (let* ((size (cuda-host-blk-size blk))
-               (handle (%cuda-map-host-blk-handle blk))
+               (handle (with-cuda-recover ("mapping a host block")
+                         (%cuda-map-host-blk-handle blk)))
                (mblk (make-cuda-mapped-blk :context *cuda-context* :root blk
                                            :size size :extent size
                                            :width size :pitch size :height 1
@@ -956,7 +988,8 @@
   (assert (cuda-valid-context-p (cuda-current-context)))
   (let* ((context (cuda-current-context)))
     (cuda-context-destroy-queued-items context)
-    (aprog1 (make-cuda-module :handle (apply #'%cuda-load-module-handle source args)
+    (aprog1 (make-cuda-module :handle (with-cuda-recover ("loading a module")
+                                        (apply #'%cuda-load-module-handle source args))
                               :context context :source source :flags args)
       (push it (cuda-context-modules context))
       (%cuda-module-init-errors context it))))
@@ -974,7 +1007,8 @@
     (call-next-method)))
 
 (def method deallocate ((module cuda-module))
-  (cuda-invoke cuModuleUnload (cuda-module-handle module)))
+  (with-cuda-recover ("unloading a module")
+    (cuda-invoke cuModuleUnload (cuda-module-handle module))))
 
 (def function %cuda-module-get-var-handle (module name)
   (let ((handle (cuda-module-ensure-handle module)))
