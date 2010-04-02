@@ -28,7 +28,7 @@
   (:method ((buffer t)) buffer)
   (:method :around ((buffer t))
     (let ((cnt (buffer-refcnt buffer)))
-      (when (and (numberp cnt) (> cnt 0))
+      (when (numberp cnt)
         (call-next-method))
       buffer)))
 
@@ -38,7 +38,7 @@
   (:method :around ((buffer null)) nil)
   (:method :around ((buffer t))
     (let ((cnt (buffer-refcnt buffer)))
-      (if (and (numberp cnt) (> cnt 0))
+      (if (numberp cnt)
           (progn
             (call-next-method)
             (if (> cnt 1) (1- cnt) nil))
