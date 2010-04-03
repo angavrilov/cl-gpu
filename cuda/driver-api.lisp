@@ -92,17 +92,25 @@
 (def function report-cuda-r-retry (msg stream)
   (format stream "Recover the CUDA context and retry ~A" msg))
 
-(defmacro with-cuda-recover ((retry-msg) &body code)
-  (with-unique-names (recover-block retry-tag)
+(defparameter *cuda-lock-recover* nil)
+
+(defmacro with-cuda-recover ((retry-msg &key block-inner on-retry) &body code)
+  (with-unique-names (recover-block retry-tag loop-tag)
     `(block ,recover-block
        (tagbody
-          ,retry-tag
+          ,(if on-retry loop-tag retry-tag)
           (restart-bind ((recover-and-retry (lambda ()
                                               (cuda-recover)
                                               (go ,retry-tag))
                            :report-function (curry #'report-cuda-r-retry ,retry-msg)
-                           :test-function #'cuda-may-recover?))
-            (return-from ,recover-block (progn ,@code)))))))
+                           :test-function (if *cuda-lock-recover*
+                                              (constantly nil)
+                                              #'cuda-may-recover?)))
+            (return-from ,recover-block
+              ,(if block-inner
+                   `(let ((*cuda-lock-recover* t)) ,@code)
+                   `(progn ,@code))))
+          ,@(if on-retry (list retry-tag on-retry `(go ,loop-tag)))))))
 
 ;;; Driver initialization
 
@@ -834,12 +842,15 @@
     (cuda-invoke cuMemHostGetDevicePointer paddr (cuda-host-blk-handle blk) 0)
     (mem-ref paddr 'cuda-device-ptr)))
 
+(def function cuda-can-map-host-blk? (blk)
+  (and (cuda-host-blk-weak-mappings blk)
+       (cuda-context-can-map? (cuda-current-context))))
+
 (def function cuda-map-host-blk (blk)
   (or (find (cuda-current-context) (cuda-host-blk-mappings blk)
             :test #'eq :key #'cuda-linear-context)
       (with-cuda-context ((cuda-host-blk-any-context blk))
-        (unless (and (cuda-host-blk-weak-mappings blk)
-                     (cuda-context-can-map? *cuda-context*))
+        (unless (cuda-can-map-host-blk? blk)
           (error "Flag mismatch: cannot map ~S in context ~S" blk *cuda-context*))
         (let* ((size (cuda-host-blk-size blk))
                (handle (with-cuda-recover ("mapping a host block")

@@ -57,6 +57,15 @@
       (when (or reads writes)
         (make-side-effects :reads reads :writes writes)))))
 
+(def function ensure-side-effects (obj)
+  (or obj (make-side-effects)))
+
+(def function gpu-var-side-effects (obj)
+  (let ((effects (ensure-side-effects obj)))
+    (make-side-effects
+     :reads (mapcar #'gpu-variable-of (side-effects-reads effects))
+     :writes (mapcar #'gpu-variable-of (side-effects-writes effects)))))
+
 (def layered-function compute-side-effects (form))
 
 (def function compute-arg-side-effects (args form)

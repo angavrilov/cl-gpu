@@ -13,6 +13,7 @@
 
 (def (generic e) bufferp (buffer)
   (:documentation "Determines if the argument is a buffer. Returns :foreign if based on foreign types.")
+  (:method ((buffer t)) nil)
   (:method ((buffer array)) :lisp))
 
 (deftype buffer ()

@@ -17,7 +17,7 @@
 (def form-attribute-accessor form-c-type)
 
 (def form-attribute-accessor gpu-variable
-  :type (or gpu-variable null) :forms name-definition-form)
+  #|:type (or gpu-variable null)|# :forms name-definition-form)
 
 (def form-attribute-accessor shared-identity
   :type (or gpu-shared-identity null) :forms name-definition-form)
@@ -42,7 +42,7 @@
   `(make-side-effects :reads (list ,@(side-effects-reads obj))
                       :writes (list ,@(side-effects-writes obj))))
 
-(def form-attribute-accessor side-effects :type (or side-effects null))
+(def form-attribute-accessor side-effects #|:type (or side-effects null)|#)
 
 ;; A wrapper for global variables
 

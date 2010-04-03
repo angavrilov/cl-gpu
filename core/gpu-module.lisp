@@ -50,6 +50,8 @@
    (static-asize   :documentation "Full dimension if all dims constant."))
   (:documentation "Common name of a global variable or parameter."))
 
+(def method gpu-variable-of ((obj gpu-variable)) obj)
+
 (def class* gpu-lexical-var (gpu-variable)
   ()
   (:documentation "A lexical variable in a GPU function."))
@@ -128,6 +130,7 @@
    (return-type    :documentation "Return type")
    (arguments      :documentation "List of arguments")
    (form           :documentation "Walker form tree for the code.")
+   (side-effects   :documentation "Side effects caused by the function.")
    (body           :documentation "Body string")
    (unique-name-tbl (make-c-name-table)
                     :documentation "A hash table used to generate unique C ids.")

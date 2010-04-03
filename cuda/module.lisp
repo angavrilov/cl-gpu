@@ -10,6 +10,48 @@
 
 (in-package :cl-gpu)
 
+;;; Buffer coercion
+
+(def generic coerce-to-cuda-mem (object &key can-copy for-write)
+  (:documentation "Converts the object to a cuda-mem-array instance.")
+  (:method ((object null) &key can-copy for-write)
+    (declare (ignore can-copy for-write))
+    (values nil))
+  (:method ((object cuda-mem-array) &key can-copy for-write)
+    (declare (ignore can-copy for-write))
+    (values object))
+  (:method ((object cuda-host-array) &key can-copy for-write)
+    (declare (ignore can-copy for-write))
+    (if (cuda-can-map-host-blk? (slot-value object 'blk))
+        (values (buffer-displace object :mapping :gpu))
+        (call-next-method)))
+  (:method ((object t) &key can-copy for-write)
+    (cond ((not (bufferp object))
+           (error "Not a buffer: ~A" object))
+          ((null can-copy)
+           (error "Cannot coerce to CUDA buffer without copy: ~A" object))
+          (t
+           (let ((buf (make-cuda-array (buffer-dimensions object)
+                                       :foreign-type (buffer-foreign-type object))))
+             (when (consp can-copy)
+               (push buf (cdr can-copy))
+               (when for-write
+                 (push (curry #'copy-full-buffer buf object) (car can-copy))))
+             (copy-full-buffer object buf)
+             (values buf t))))))
+
+(def function cuda-cleanup-copies (copy-list)
+  (restart-case
+      (progn
+        (cuda-context-synchronize)
+        (mapc #'funcall (car copy-list)))
+    (recover-and-continue ()
+      :report "Recover the CUDA context and return."
+      :test cuda-may-recover?
+      (cuda-recover)))
+  (mapc #'deref-buffer (cdr copy-list))
+  nil)
+
 ;;; Instance
 
 (defstruct (cuda-module-instance (:include gpu-module-instance))
@@ -58,7 +100,7 @@
 
 (def method (setf gpu-global-value) (value (obj cuda-static-global))
   (unless (eq value (buffer-of obj))
-    (if (arrayp value)
+    (if (bufferp value)
         (copy-full-buffer value (buffer-of obj))
         (error "Cannot set the value of a static array global.")))
   (values (buffer-of obj)))
@@ -147,19 +189,20 @@
         (copy-full-buffer dim-buf buffer)))))
 
 (def method (setf gpu-global-value) (value (-self- cuda-dynarray-global))
-  (unless (eq value (value-of -self-))
-    (if value
-        (progn
-          (%upload-dynarray-descriptor (buffer-of -self-) (var-decl-of -self-) value)
-          ;; Establish the reference (includes increasing the refcnt)
-          (cuda-linear-reference (blk-of -self-) (slot-value value 'blk)))
-        (buffer-fill (buffer-of -self-) 0))
-    ;; Save the new value and detach the old one
-    (let ((old-val (value-of -self-)))
-      (setf (value-of -self-) value)
-      (when old-val
-        (cuda-linear-unreference (blk-of -self-) (slot-value old-val 'blk)))))
-  (values value))
+  (let ((value (coerce-to-cuda-mem value)))
+    (unless (eq value (value-of -self-))
+      (if value
+          (progn
+            (%upload-dynarray-descriptor (buffer-of -self-) (var-decl-of -self-) value)
+            ;; Establish the reference (includes increasing the refcnt)
+            (cuda-linear-reference (blk-of -self-) (slot-value value 'blk)))
+          (buffer-fill (buffer-of -self-) 0))
+      ;; Save the new value and detach the old one
+      (let ((old-val (value-of -self-)))
+        (setf (value-of -self-) value)
+        (when old-val
+          (cuda-linear-unreference (blk-of -self-) (slot-value old-val 'blk)))))
+    (values value)))
 
 (def method freeze-module-item ((-self- cuda-dynarray-global))
   (aif (value-of -self-) (ref-buffer it)))
@@ -185,14 +228,15 @@
     (let ((fun (funcall (invoker-fun-of decl) -self-)))
       (closer-mop:set-funcallable-instance-function -self- fun))))
 
-(def function generate-arg-setter (obj offset fhandle)
+(def function generate-arg-setter (obj offset fhandle copy-list effects)
   (with-slots (name item-type dimension-mask static-asize
                     include-size? included-dims
                     include-extent? included-strides) obj
     (if (null dimension-mask)
         `(,(cuda-param-setter-name item-type) ,fhandle ,offset ,name)
         (let ((wofs (+ offset +cuda-ptr-size+ -4))
-              (dynarr (null static-asize)))
+              (dynarr (null static-asize))
+              (written? (if (member obj (side-effects-writes effects)) t)))
           (flet ((setter (value)
                    `(cuda-param-set-uint32 ,fhandle ,(incf wofs 4) ,value)))
             (let ((obj (make-symbol (symbol-name name)))
@@ -218,8 +262,8 @@
                                 `(let ((astrides strides))
                                    (declare (type (vector uint32) astrides))
                                    ,@(if ext (list* ext items) items))))))))
-              `(let ((,obj ,name))
-                 (check-type ,obj cuda-mem-array)
+              `(let ((,obj (coerce-to-cuda-mem ,name :can-copy ,copy-list :for-write ,written?)))
+                 (declare (type cuda-mem-array ,obj))
                  (with-slots (blk elt-type size dims strides) ,obj
                    (with-cuda-context ((cuda-linear-context blk))
                      (assert (equal elt-type ',item-type))
@@ -229,8 +273,9 @@
 (def layered-method generate-invoker-form :in cuda-target ((obj gpu-kernel))
   (multiple-value-bind (args arg-size)
       (compute-field-layout obj 0)
-    (with-unique-names (kernel fobj fhandle bx by bz gx gy)
-      (bind (((:values rq-arg-names key-arg-specs aux-arg-specs)
+    (with-unique-names (kernel fobj fhandle bx by bz gx gy copy-list)
+      (bind ((effects (side-effects-of obj))
+             ((:values rq-arg-names key-arg-specs aux-arg-specs)
               (loop for arg in (arguments-of obj)
                  if (keyword-of arg)
                  collect `((,(keyword-of arg) ,(name-of arg))
@@ -243,7 +288,7 @@
               (mapcar (lambda (arg)
                         (destructuring-bind (obj offset size) arg
                           (declare (ignore size))
-                          (generate-arg-setter obj offset fhandle)))
+                          (generate-arg-setter obj offset fhandle copy-list effects)))
                       args)))
         `(lambda (,kernel)
            (declare (type cuda-kernel ,kernel))
@@ -254,12 +299,20 @@
                  ((:thread-cnt-z ,bz) 1) ((:block-cnt-x ,gx) 1)
                  ((:block-cnt-y ,gy) 1) ,@key-arg-specs
                  ,@(if aux-arg-specs `(&aux ,@aux-arg-specs)))
-               (let* ((,fhandle (cuda-function-ensure-handle ,fobj)))
-                 (with-cuda-context ((cuda-function-context ,fobj))
-                   ,@arg-setters
-                   (cuda-invoke cuParamSetSize ,fhandle ,arg-size)
-                   (cuda-invoke cuFuncSetBlockShape ,fhandle ,bx ,by ,bz)
-                   (cuda-invoke cuLaunchGrid ,fhandle ,gx ,gy))))))))))
+               (with-cuda-context ((cuda-function-context ,fobj))
+                 (let ((,copy-list (cons nil nil)))
+                   (declare (dynamic-extent ,copy-list))
+                   (with-cuda-recover (,(format nil "launching ~A of module ~A"
+                                                (name-of obj) (name-of *cur-gpu-module*))
+                                        :block-inner t
+                                        :on-retry (setf (car ,copy-list) nil))
+                     (let* ((,fhandle (cuda-function-ensure-handle ,fobj)))
+                       ,@arg-setters
+                       (cuda-invoke cuParamSetSize ,fhandle ,arg-size)
+                       (cuda-invoke cuFuncSetBlockShape ,fhandle ,bx ,by ,bz)
+                       (cuda-invoke cuLaunchGrid ,fhandle ,gx ,gy)))
+                   (when (cdr ,copy-list)
+                     (cuda-cleanup-copies ,copy-list)))))))))))
 
 ;;; Module instantiation
 
@@ -317,6 +370,8 @@
     (propagate-c-types (form-of function) :upper-type :void)
     (compute-side-effects (form-of function))
     (flatten-statements (form-of function))
+    (setf (side-effects-of function)
+          (gpu-var-side-effects (side-effects-of (form-of function))))
     (setf (body-of function)
           (with-output-to-string (stream)
             (emit-code-newline stream)
