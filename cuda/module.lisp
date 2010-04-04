@@ -20,6 +20,9 @@
   (:method ((object cuda-mem-array) &key can-copy for-write)
     (declare (ignore can-copy for-write))
     (values object))
+  (:method :after ((object cuda-debug-mem-array) &key can-copy for-write)
+    (when (and for-write (consp can-copy))
+      (push (curry #'update-buffer-mirror object) (car can-copy))))
   (:method ((object cuda-host-array) &key can-copy for-write)
     (declare (ignore can-copy for-write))
     (if (cuda-can-map-host-blk? (slot-value object 'blk))
@@ -32,7 +35,8 @@
            (error "Cannot coerce to CUDA buffer without copy: ~A" object))
           (t
            (let ((buf (make-cuda-array (buffer-dimensions object)
-                                       :foreign-type (buffer-foreign-type object))))
+                                       :foreign-type (buffer-foreign-type object)
+                                       :debug nil)))
              (when (consp can-copy)
                (push buf (cdr can-copy))
                (when for-write
@@ -71,7 +75,10 @@
          (name (c-name-of (var-decl-of -self-)))
          (blk (cuda-module-get-var module name))
          (size (cuda-linear-size blk))
-         (buffer (make-instance 'cuda-mem-array
+         (buffer (make-instance (if (and *cuda-debug*
+                                         (not (typep -self- 'cuda-dynarray-global)))
+                                    'cuda-debug-mem-array
+                                    'cuda-mem-array)
                                 :blk blk :size size
                                 :elt-type :uint8 :elt-size 1
                                 :dims (to-uint32-vector (list size))
@@ -108,6 +115,9 @@
 (def method freeze-module-item ((obj cuda-static-global))
   (when (cuda-linear-valid-p (blk-of obj))
     (buffer-as-array (buffer-of obj))))
+
+(def method update-buffer-mirror ((obj cuda-static-global))
+  (update-buffer-mirror (buffer-of obj)))
 
 ;; ----
 
@@ -211,6 +221,9 @@
   (setf (value-of item) nil)
   (deref-buffer obj))
 
+(def method update-buffer-mirror ((obj cuda-dynarray-global))
+  (update-buffer-mirror (value-of obj)))
+
 ;;; CUDA kernels
 
 (def class* cuda-kernel (closer-mop:funcallable-standard-object)
@@ -273,7 +286,7 @@
 (def layered-method generate-invoker-form :in cuda-target ((obj gpu-kernel))
   (multiple-value-bind (args arg-size)
       (compute-field-layout obj 0)
-    (with-unique-names (kernel fobj fhandle bx by bz gx gy copy-list)
+    (with-unique-names (kernel ivec fobj fhandle bx by bz gx gy copy-list)
       (bind ((effects (side-effects-of obj))
              ((:values rq-arg-names key-arg-specs aux-arg-specs)
               (loop for arg in (arguments-of obj)
@@ -284,6 +297,10 @@
                  collect `(,(name-of arg) ,(default-value-of arg)) into aux
                  else collect (name-of arg) into rq
                  finally (return (values rq kwd aux))))
+             (write-sets
+              (loop for gvar in (side-effects-writes effects)
+                 when (typep gvar 'gpu-global-var)
+                 collect `(,(gensym "GVAR") (svref ,ivec ,(index-of gvar)))))
              (arg-setters
               (mapcar (lambda (arg)
                         (destructuring-bind (obj offset size) arg
@@ -292,8 +309,11 @@
                       args)))
         `(lambda (,kernel)
            (declare (type cuda-kernel ,kernel))
-           (let ((,fobj (fun-obj-of ,kernel)))
-             (declare (type cuda-function ,fobj))
+           (let* ((,fobj (fun-obj-of ,kernel))
+                  (,ivec (gpu-module-instance-item-vector (instance-of ,kernel)))
+                  ,@write-sets)
+             (declare (type cuda-function ,fobj)
+                      (ignorable ,ivec))
              (lambda (,@rq-arg-names &key
                  ((:thread-cnt-x ,bx) 1) ((:thread-cnt-y ,by) 1)
                  ((:thread-cnt-z ,bz) 1) ((:block-cnt-x ,gx) 1)
@@ -306,12 +326,18 @@
                                                 (name-of obj) (name-of *cur-gpu-module*))
                                         :block-inner t
                                         :on-retry (setf (car ,copy-list) nil))
+                     (when *cuda-debug*
+                       (cuda-context-synchronize)
+                       ,@(mapcar (lambda (x)
+                                   `(push (curry #'update-buffer-mirror ,(first x))
+                                          (car ,copy-list)))
+                                 write-sets))
                      (let* ((,fhandle (cuda-function-ensure-handle ,fobj)))
                        ,@arg-setters
                        (cuda-invoke cuParamSetSize ,fhandle ,arg-size)
                        (cuda-invoke cuFuncSetBlockShape ,fhandle ,bx ,by ,bz)
                        (cuda-invoke cuLaunchGrid ,fhandle ,gx ,gy)))
-                   (when (cdr ,copy-list)
+                   (when (or *cuda-debug* (cdr ,copy-list))
                      (cuda-cleanup-copies ,copy-list)))))))))))
 
 ;;; Module instantiation

@@ -15,6 +15,9 @@
 
 (use-foreign-library libcuda)
 
+(def (special-variable e) *cuda-debug* t
+  "Enables a debugging-oriented operation mode for CUDA code.")
+
 ;;; Error handling
 
 (macrolet ((mkerr (&rest errors)
@@ -374,7 +377,8 @@
 
 (def (function e) cuda-create-context (device &optional flags)
   (with-lock-held (*cuda-context-lock*)
-    (let* ((flags (copy-list (ensure-list flags)))
+    (let* ((flags (nconc (copy-list (ensure-list flags))
+                         (if *cuda-debug* (list :map-host))))
            (thread (current-thread))
            (context (make-cuda-context :device device
                                        :handle (%cuda-create-context-handle device flags)
@@ -435,7 +439,7 @@
 (def method cuda-reallocate ((context cuda-context))
   (unless (cuda-context-handle context)
     (error "Context already destroyed."))
-  (warn "Context reallocation resets device memory buffers to zero.")
+  (warn "Context reallocation resets non-debug device memory buffers to zero.")
   (with-lock-held (*cuda-context-lock*)
     ;; Defer reference invalidation actions until the context is OK.
     (with-deferred-actions (*cuda-context-wipe*)

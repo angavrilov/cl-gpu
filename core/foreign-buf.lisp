@@ -267,3 +267,57 @@
   (with-foreign-array-ref ((s-ptr) src src-offset)
     (with-foreign-array-ref ((d-ptr) dst dst-offset)
       (memmove d-ptr s-ptr (* count elt-size)))))
+
+;;; A mirrored foreign buffer
+
+(def class* mirrored-foreign-buffer (abstract-foreign-buffer)
+  ((mirror :type foreign-array))
+  (:automatic-accessors-p nil))
+
+(def function make-displaced-foreign-mirror (dbuf displaced-to)
+  (with-slots (mirror dims size elt-size elt-type log-offset) dbuf
+    (let* ((base-mirror (slot-value displaced-to 'mirror))
+           (base-blk (slot-value base-mirror 'blk)))
+      (setf mirror
+            (make-instance 'foreign-array :blk base-blk :dims dims
+                           :log-offset log-offset :size size
+                           :elt-size elt-size :elt-type elt-type)))))
+
+(def function alloc-base-foreign-mirror (dbuf)
+  (with-slots (mirror dims log-offset displaced-to elt-type) dbuf
+    (assert (and (null displaced-to) (= log-offset 0)))
+    (setf mirror
+          (make-foreign-array (coerce dims 'list) :foreign-type elt-type))
+    (copy-full-buffer dbuf mirror)))
+
+(def constructor mirrored-foreign-buffer
+  (unless (slot-boundp -self- 'mirror)
+    (aif (slot-value -self- 'displaced-to)
+         (make-displaced-foreign-mirror -self- it)
+         (alloc-base-foreign-mirror -self-))))
+
+#+nil
+(def method update-instance-for-different-class :after
+  (old-inst (-self- mirrored-foreign-buffer) &key)
+  (declare (ignore old-inst))
+  (unless (slot-boundp -self- 'mirror)
+    (alloc-base-foreign-mirror -self-)))
+
+(def generic update-buffer-mirror (buffer)
+  (:method ((buffer t)) nil)
+  (:method ((buffer mirrored-foreign-buffer))
+    (copy-full-buffer buffer (slot-value buffer 'mirror))))
+
+(def method deref-buffer :after ((buffer mirrored-foreign-buffer))
+  (when (null (buffer-refcnt (slot-value buffer 'blk)))
+    (deref-buffer (slot-value buffer 'mirror))))
+
+(def method (setf row-major-bref) :after (value (buffer mirrored-foreign-buffer) index)
+  (setf (row-major-bref (slot-value buffer 'mirror) index) value))
+
+(def method buffer-fill :after ((buffer mirrored-foreign-buffer) value &key start end)
+  (buffer-fill (slot-value buffer 'mirror) value :start start :end end))
+
+(def method %copy-buffer-data :after ((src t) (dst mirrored-foreign-buffer) src-offset dst-offset count)
+  (%copy-buffer-data src (slot-value dst 'mirror) src-offset dst-offset count))
+

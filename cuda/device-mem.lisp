@@ -32,10 +32,30 @@
 (def method print-object ((obj cuda-mem-array) stream)
   (print-buffer "CUDA Array" obj stream))
 
+;; Debug version of cuda-mem-array that mirrors all data.
+(def class* cuda-debug-mem-array (cuda-mem-array mirrored-foreign-buffer)
+  ()
+  (:automatic-accessors-p nil))
+
+(def method print-object ((obj cuda-debug-mem-array) stream)
+  (print-buffer "CUDA Array (DBG)" obj stream))
+
+(def function recover-cuda-mem-array (mblk blk ref)
+  (declare (ignore ref))
+  (%cuda-linear-dh-transfer blk (foreign-block-handle mblk)
+                            0 (foreign-block-size mblk) nil))
+
+(def constructor cuda-debug-mem-array
+  (with-slots (mirror blk displaced-to) -self-
+    (unless displaced-to
+      (setf (cuda-linear-recover-cb blk)
+            (curry #'recover-cuda-mem-array
+                   (slot-value mirror 'blk))))))
+
 (def (function e) make-cuda-array (dims &key (element-type 'single-float)
                                         (foreign-type (lisp-to-foreign-elt-type element-type) ft-p)
                                         pitch-elt-size (pitch-level 1)
-                                        initial-element)
+                                        initial-element (debug *cuda-debug*))
   (unless foreign-type
     (error "Invalid cuda array type: ~S" (if ft-p foreign-type element-type)))
   (let* ((dims (ensure-list dims))
@@ -51,7 +71,10 @@
                                    (reduce #'* head-dims)
                                    :pitch-for pitch-elt-size))
            (strides (compute-linear-strides blk dims elt-size pitch-level))
-           (buffer (make-instance 'cuda-mem-array :blk blk :size size
+           (buffer (make-instance (if debug
+                                      'cuda-debug-mem-array
+                                      'cuda-mem-array)
+                                  :blk blk :size size
                                   :elt-type foreign-type :elt-size elt-size
                                   :dims (to-uint32-vector dims)
                                   :strides (to-uint32-vector strides))))
