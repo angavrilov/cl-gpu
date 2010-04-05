@@ -34,11 +34,13 @@
                              (:file "side-effects" :depends-on ("gpu-module" "forms"))
                              (:file "builtins" :depends-on ("type-inf" "codegen" "unnest" "side-effects"))
                              (:file "syntax" :depends-on ("inline" "type-inf"))))
+               #+cuda
                (:module "cuda"
                 :depends-on ("core")
-                :components (#+cuda (:file "driver-api")
-                             #+cuda (:file "pitched-copy" :depends-on ("driver-api"))
-                             #+cuda (:file "device-mem" :depends-on ("driver-api" "pitched-copy"))
+                :components ((:file "driver-lib")
+                             (:file "driver-api" :depends-on ("driver-lib"))
+                             (:file "pitched-copy" :depends-on ("driver-api"))
+                             (:file "device-mem" :depends-on ("driver-api" "pitched-copy"))
                              (:file "nvcc")
-                             #+cuda (:file "target" :depends-on ("driver-api" "nvcc"))
-                             #+cuda (:file "module" :depends-on ("device-mem" "target" "nvcc"))))))
+                             (:file "target" :depends-on ("driver-api" "nvcc"))
+                             (:file "module" :depends-on ("device-mem" "target" "nvcc"))))))
