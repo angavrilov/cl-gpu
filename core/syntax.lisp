@@ -70,6 +70,11 @@
                    :form form :arguments args
                    :unique-name-tbl fid-table)))
 
+(def function parse-function (code &key env)
+  (let* ((form (preprocess-function
+                (walk-form `(defun ,@code) :environment env))))
+    (make-instance 'common-gpu-function :name (name-of form) :form form)))
+
 (def function parse-gpu-module-spec (spec &key name environment)
   (with-active-layers (gpu-target)
     (let ((id-table (make-c-name-table))
@@ -114,7 +119,7 @@
             ((:constants)
              (add-variables (second item) (cddr item) :constantp t))
             ;; Skip on this pass
-            ((:kernel))))
+            ((:kernel :function))))
         ;; Collect and parse the kernels
         (let ((kernel-env (reduce (lambda (var env)
                                     (walk-environment/augment
@@ -123,6 +128,9 @@
                                   :from-end t :initial-value base-env)))
           (dolist (item spec)
             (case (first item)
+              ((:function)
+               (let ((func (parse-function (rest item) :env kernel-env)))
+                 (walk-environment/augment! kernel-env :function (name-of func) (form-of func))))
               ((:kernel)
                (push (parse-kernel (rest item) :env kernel-env :id-table id-table
                                    :globals var-list)
@@ -132,6 +140,17 @@
                      :globals (nreverse var-list)
                      :functions nil
                      :kernels (nreverse kernel-list)))))
+
+(def (definer e :available-flags "e") gpu-function (name args &body code)
+  (let ((func (parse-function (list* name args code)
+                              :env (make-walk-environment -environment-))))
+    `(eval-when (:compile-toplevel :load-toplevel :execute)
+       ,@(when (getf -options- :export)
+               `((export ',name)))
+       (setf (symbol-gpu-function ',name) ,func)
+       ,@(if (not (getf -options- :gpu-only))
+             `((defun ,name ,args ,@code)))
+       ',name)))
 
 (def (definer e :available-flags "eas") gpu-module (name &body spec)
   "Defines a new global GPU code module."

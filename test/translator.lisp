@@ -149,6 +149,9 @@
                   (truncate 13U 8) (truncate -13 8) (truncate 13U 10) (truncate -13 10) (truncate 13U a)
                   (round 13U 8) (round -13 8) (round 13U 10) (round -13 10) (truncate 13U a))))))
 
+(def gpu-function test-gpu-f (x y z)
+  (+ (* x y) z))
+
 (def test test/translator/compute-5 (target)
   (test-computations (target)
     (labels ((test1 (a b &optional (c 0) &key (d 0) (e 0))
@@ -158,7 +161,7 @@
       (test-int (test1 2 3) (test1 2 3 4) (test1 2 3 4 :d 5)
                 (test1 2 3 4 :e 7) (test1 2 3 4 :e 7 :d 3)
                 (test2 7 3) (test2 7 3 :c 9))
-      (test-float (test2 0.3 0.2))
+      (test-float (test2 0.3 0.2) (test-gpu-f 7 0.1 -2))
       (let ((iv 0))
         (test-int (test2 1 2 :z (incf iv))
                   (test2 1 2 :c (incf iv) :z (setf iv -3)))))))

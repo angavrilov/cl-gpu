@@ -26,7 +26,8 @@
   (:import-from #:hu.dwim.walker
                 #:recurse #:recurse-on-body
                 #:variable #:value #:body #:declarations
-                #:walk-environment/augment #:bindings
+                #:walk-environment/augment #:walk-environment/augment!
+                #:bindings #:function-name?
                 #:-augment- #:with-current-form
                 #:unwalk-declarations
                 #:do-list-collect #:make-declaration)

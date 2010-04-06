@@ -306,6 +306,10 @@
 
 ;;; Misc
 
+(def layered-method function-name? :in gpu-target ((s symbol))
+  (or (symbol-gpu-function s)
+      (call-next-method)))
+
 (def function has-merged-assignment? (form)
   (atypecase (parent-of form)
     ((or multiple-value-setq-form setq-form)

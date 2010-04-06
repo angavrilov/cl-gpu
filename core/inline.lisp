@@ -161,6 +161,11 @@
   (:method ((form walked-lexical-application-form))
     (inline-one-call form (definition-of form) (arguments-of form)))
 
+  (:method ((form free-application-form))
+    (aif (symbol-gpu-function (operator-of form))
+         (inline-one-call form (form-of it) (arguments-of form))
+         (call-next-method)))
+
   (:method ((form lambda-application-form))
     (inline-one-call form (operator-of form) (arguments-of form) :no-copy? t)))
 
@@ -335,6 +340,10 @@
                         (make-instance 'gpu-shared-identity :name (name-of form))))))
              form)
            tree))
+
+(def function preprocess-function (tree)
+  (assign-shared-identities tree)
+  tree)
 
 (def function preprocess-tree (tree global-vars)
   (assign-shared-identities tree)

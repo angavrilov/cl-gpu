@@ -122,6 +122,13 @@
       (when static-asize
         (setf includes-locked? t)))))
 
+(def class* common-gpu-function (save-slots-mixin)
+  ((name           :documentation "Lisp name of the function.")
+   (form           :documentation "Walker form tree for the code."))
+  (:documentation "A gpu function defined outside of a module"))
+
+(def macro symbol-gpu-function (s) `(get ,s 'gpu-function))
+
 (defparameter *cur-gpu-function* nil)
 
 (def class* gpu-function (save-slots-mixin)
