@@ -613,32 +613,6 @@
 (def function float-name-tag (type)
   (ecase type (:double "") (:float "f")))
 
-(def definer float-function-builtin (name c-name)
-  `(progn
-     (def type-computer ,name (arg)
-       (ensure-float-result -arguments- -form-))
-     (def c-code-emitter ,name (arg)
-       (emit "~A~A(" ,c-name (float-name-tag (form-c-type-of -form-)))
-       (code arg ")"))))
-
-(def float-function-builtin sin "sin")
-(def float-function-builtin asin "asin")
-(def float-function-builtin sinh "sinh")
-(def float-function-builtin asinh "asinh")
-
-(def float-function-builtin cos "cos")
-(def float-function-builtin acos "acos")
-(def float-function-builtin cosh "cosh")
-(def float-function-builtin acosh "acosh")
-
-(def float-function-builtin tan "tan")
-(def float-function-builtin atan "atan")
-(def float-function-builtin tanh "tanh")
-(def float-function-builtin atanh "atanh")
-
-(def float-function-builtin exp "exp")
-(def float-function-builtin sqrt "sqrt")
-
 (def definer float-builtin (name args &body code)
   `(progn
      (def type-computer ,name ,args
@@ -646,44 +620,80 @@
      (def c-code-emitter ,name ,args
        ,@code)))
 
+;; Miscellaneous
+
+(macrolet ((builtins (&rest names)
+             `(progn
+                ,@(mapcar (lambda (name)
+                            `(def float-builtin ,name (arg)
+                               (emit "~A~A(" ,(string-downcase (symbol-name name))
+                                     (float-name-tag (form-c-type-of -form-)))
+                               (code arg ")")))
+                          names))))
+  (builtins sin asin sinh asinh
+            cos acos cosh acosh
+            tan atan tanh atanh
+            sqrt))
+
+;; Logarithm
+
+(macrolet ((mklog ((xtype xbase) &body code)
+             `(def layered-method emit-log-c-code
+                (stream (type ,(eql-spec-if #'keywordp xtype))
+                        (base ,(eql-spec-if #'numberp xbase))
+                        arg)
+                (with-c-code-emitter-lexicals (stream)
+                  ,@code))))
+  (def layered-function emit-log-c-code (stream type base arg)
+    (:documentation "Emits code for a logarithm function, dispatching on the type and base.")
+    (:method (stream type base arg)
+      (write-string "(" stream)
+      (emit-log-c-code stream type nil arg)
+      (write-string "/" stream)
+      (emit-log-c-code stream type nil base)
+      (write-string ")" stream))
+    (:method (stream type (base null) arg)
+      (declare (ignore stream arg))
+      (error "Invalid return type in emit-log-c-code: ~A" type)))
+  (mklog (:float 10)    (code "log10f(" arg ")"))
+  (mklog (:float 2)     (code "log2f(" arg ")"))
+  (mklog (:float null)  (code "logf(" arg ")"))
+  (mklog (:float real)  (code "(logf(" arg ")/" (log (float base 1.0)) ")"))
+  (mklog (:double 10)   (code "log10(" arg ")"))
+  (mklog (:double 2)    (code "log2(" arg ")"))
+  (mklog (:double null) (code "log(" arg ")"))
+  (mklog (:double real) (code "(log(" arg ")/" (log (float base 1.0d0)) ")")))
+
 (def float-builtin log (arg &optional base)
-  (let* ((tail-tag (float-name-tag (form-c-type-of -form-)))
-         (base-val (constant-number-value base)))
-    (cond ((and base-val
-                (or (= base-val 10) (= base-val 2)))
-           (emit "log~A~A(" base-val tail-tag)
-           (code arg ")"))
-          (base-val
-           (emit "(log~A(" tail-tag)
-           (code arg)
-           (emit ")/~,,,,,,'EE~A)"
-                 (log (float base-val 1.0d0)) tail-tag))
-          (base
-           (emit "(log~A(" tail-tag)
-           (code arg)
-           (emit ")/log~A(" tail-tag)
-           (code base "))"))
-          (t
-           (emit "log~A(" tail-tag)
-           (code arg ")")))))
+  (emit-log-c-code -stream- (form-c-type-of -form-) (or (constant-number-value base) base) arg))
+
+;; Exponent
+
+(macrolet ((mkexp ((xtype xbase) &body code)
+             `(def layered-method emit-exp-c-code
+                (stream (type ,(eql-spec-if #'keywordp xtype))
+                        (base ,(eql-spec-if #'numberp xbase))
+                        arg)
+                (with-c-code-emitter-lexicals (stream)
+                  ,@code))))
+  (def layered-function emit-exp-c-code (stream type base arg)
+    (:documentation "Emits code for an exponentiation, dispatching on the type and base."))
+  (mkexp (:float 10)    (code "exp10f(" arg ")"))
+  (mkexp (:float 2)     (code "exp2f(" arg ")"))
+  (mkexp (:float null)  (code "expf(" arg ")"))
+  (mkexp (:float real)  (code "expf(" arg "*" (log (float base 1.0)) ")"))
+  (mkexp (:float t)     (code "powf(" base "," arg ")"))
+  (mkexp (:double 10)   (code "exp10(" arg ")"))
+  (mkexp (:double 2)    (code "exp2(" arg ")"))
+  (mkexp (:double null) (code "exp(" arg ")"))
+  (mkexp (:double real) (code "exp(" arg "*" (log (float base 1.0d0)) ")"))
+  (mkexp (:double t)    (code "pow(" base "," arg ")")))
+
+(def float-builtin exp (power)
+  (emit-exp-c-code -stream- (form-c-type-of -form-) nil power))
 
 (def float-builtin expt (base power)
-  (let* ((tail-tag (float-name-tag (form-c-type-of -form-)))
-         (base-val (constant-number-value base)))
-    (cond ((and base-val
-                (or (= base-val 10) (= base-val 2)))
-           (emit "exp~A~A(" base-val tail-tag)
-           (code power ")"))
-          (base-val
-           (emit "exp~A(" tail-tag)
-           (code power)
-           (emit "*~,,,,,,'EE~A)"
-                 (log (float base-val 1.0d0)) tail-tag))
-          (t
-           (emit "exp~A(" tail-tag)
-           (code power)
-           (emit "*log~A(" tail-tag)
-           (code base "))")))))
+  (emit-exp-c-code -stream- (form-c-type-of -form-) (or (constant-number-value base) base) power))
 
 ;;; Rounding
 

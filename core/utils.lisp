@@ -47,6 +47,9 @@
 (def function make-type-arg (sym)
   (format-symbol t "~A/TYPE" sym))
 
+(def function eql-spec-if (predicate value)
+  (if (funcall predicate value) `(eql ,value) value))
+
 (def macro make-builtin-handler-method (builtin-name
                                         builtin-args
                                         method-name-selector
