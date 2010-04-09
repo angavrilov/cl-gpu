@@ -147,6 +147,9 @@
      (format stream "*~A" (generate-array-stride gpu-var i)))
   (princ "))" stream))
 
+(def (function i) generate-bound-checks? ()
+  (is-optimize-level-any? :check-bounds 1 'safety 1))
+
 (def function emit-aref-core (form var indexes stream &key value
                                    (item-type-fun #'second) (index-bias 0)
                                    (access-prefix-fun (constantly "*"))
@@ -157,7 +160,7 @@
            (rank (length (dimension-mask-of gpu-var)))
            (prefix (funcall access-prefix-fun form)))
       (assert (= (+ (length indexes) index-bias) rank))
-      (if (is-optimize-level? 'safety 1)
+      (if (generate-bound-checks?)
           ;; With bound checks
           (with-c-code-block (stream)
             (loop for i from 0 and index in indexes
@@ -203,7 +206,7 @@
      (def side-effects ,name (arr &rest indexes)
        (make-side-effects :reads (list (ensure-gpu-var arr))))
      (def is-statement? ,name (arr &rest indexes)
-       (is-optimize-level? 'safety 1))
+       (generate-bound-checks?))
      (def c-code-emitter ,name (arr &rest indexes)
        (emit-aref-core -form- arr indexes -stream- ,@flags))
      (def type-arg-walker (setf ,name) (arr &rest indexes)
@@ -213,7 +216,7 @@
      (def side-effects (setf ,name) (arr &rest indexes)
        (make-side-effects :writes (list (ensure-gpu-var arr))))
      (def is-statement? (setf ,name) (arr &rest indexes)
-       (is-optimize-level? 'safety 1))
+       (generate-bound-checks?))
      (def c-code-emitter (setf ,name) (arr &rest indexes)
        (emit-aref-core -form- arr indexes -stream- :value -value- ,@flags))))
 
@@ -254,7 +257,7 @@
            (refname (generate-var-ref gpu-var))
            (prefix (funcall access-prefix-fun form))
            (access-range (funcall access-range-fun form)))
-      (if (is-optimize-level? 'safety 1)
+      (if (generate-bound-checks?)
           ;; With bound checks
           (with-c-code-block (stream)
             (code "unsigned IDX = " index ";" #\Newline
@@ -288,7 +291,7 @@
      (def side-effects ,name (arr indexes ,@xargs)
        (make-side-effects :reads (list (ensure-gpu-var arr))))
      (def is-statement? ,name (arr indexes ,@xargs)
-       (is-optimize-level? 'safety 1))
+       (generate-bound-checks?))
      (def c-code-emitter ,name (arr indexes ,@xargs)
        (emit-raw-aref-core -form- arr indexes -stream- ,@flags))
      (def type-arg-walker (setf ,name) (arr indexes ,@xargs)
@@ -298,7 +301,7 @@
      (def side-effects (setf ,name) (arr indexes ,@xargs)
        (make-side-effects :writes (list (ensure-gpu-var arr))))
      (def is-statement? (setf ,name) (arr indexes ,@xargs)
-       (is-optimize-level? 'safety 1))
+       (generate-bound-checks?))
      (def c-code-emitter (setf ,name) (arr indexes ,@xargs)
        (emit-raw-aref-core -form- arr indexes -stream- :value -value- ,@flags))))
 
@@ -354,7 +357,7 @@
   :uint32)
 
 (def is-statement? array-raw-index (arr &rest indexes)
-  (is-optimize-level? 'safety 1))
+  (generate-bound-checks?))
 
 (def c-code-emitter array-raw-index (arr &rest indexes)
   (emit-aref-core -form- arr indexes -stream-

@@ -290,6 +290,13 @@
 (def (function i) is-optimize-level? (name value)
   (>= (get-optimize-value name) value))
 
+(def function is-optimize-level-any? (&rest keyvals)
+  (loop
+     for entry in *optimize-flags*
+     for value = (or (second entry) 3)
+     for rq-value = (getf keyvals (first entry))
+     when rq-value return (>= value rq-value)))
+
 (def function collect-optimize-decls (form)
   (loop for decl in (declarations-of form)
      when (typep decl 'optimize-declaration-form)
@@ -297,7 +304,7 @@
      when (typep decl 'gpu-optimize-declaration-form)
      collect (ensure-cons (specification-of decl)) into gpu-decls
      finally
-       (return (nconc gpu-decls lisp-decls))))
+       (return (nreverse (nconc lisp-decls gpu-decls)))))
 
 (def macro with-optimize-context ((form) &body code)
   `(let ((*optimize-flags*
