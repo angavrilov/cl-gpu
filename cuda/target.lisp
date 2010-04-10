@@ -217,3 +217,98 @@
           (otherwise
            (error "Invalid CUDA barrier mode: ~S" it)))))
 
+;; Fast arithmetics
+
+(def function cuda-optimize-fast-div? (&optional (type :float))
+  (and (eq type :float)
+       (is-optimize-level-any? :fast-div 1 :fast-math 1 'speed 3)))
+
+(def (c-code-emitter :in cuda-target) / (&rest args)
+  (if (cuda-optimize-fast-div? (form-c-type-of -form-))
+      (multiple-value-bind (arg1 rargs)
+          (if (rest args)
+              (values (first args) (rest args))
+              (values 1.0 args))
+        (code "__fdividef(" arg1 ",")
+        (emit-separated -stream- rargs "*")
+        (code ")"))
+      (call-next-method)))
+
+(macrolet ((builtins (&rest names)
+             `(progn
+                ,@(mapcar (lambda (name)
+                            `(def (c-code-emitter :in cuda-target) ,name (arg)
+                               (if (and (eq (form-c-type-of -form-) :float)
+                                        (is-optimize-level-any?
+                                         ,(format-symbol :keyword "FAST-~A" name)
+                                         1 :fast-math 1 'speed 3))
+                                   (code ,(format nil "__~Af(" (string-downcase (symbol-name name)))
+                                         arg ")")
+                                   (call-next-method))))
+                          names))))
+  (builtins sin cos tan))
+
+(def function cuda-optimize-fast-log? ()
+  (is-optimize-level-any? :fast-log 1 :fast-math 1 'speed 3))
+
+(macrolet ((mklog ((xtype xbase) &body code)
+             `(def layered-method emit-log-c-code :in cuda-target
+                (stream (type ,(eql-spec-if #'keywordp xtype))
+                        (base ,(eql-spec-if #'numberp xbase))
+                        arg)
+                (if (cuda-optimize-fast-log?)
+                    (with-c-code-emitter-lexicals (stream)
+                      ,@code)
+                    (call-next-method)))))
+  (def layered-method emit-log-c-code :in cuda-target (stream type base arg)
+    (if (cuda-optimize-fast-div? type)
+        (progn
+          (write-string "__fdividef(" stream)
+          (emit-log-c-code stream type nil arg)
+          (write-string "," stream)
+          (emit-log-c-code stream type nil base)
+          (write-string ")" stream))
+        (call-next-method)))
+  (mklog (:float 10)    (code "__log10f(" arg ")"))
+  (mklog (:float 2)     (code "__log2f(" arg ")"))
+  (mklog (:float null)  (code "__logf(" arg ")")))
+
+(def function cuda-optimize-fast-exp? ()
+  (is-optimize-level-any? :fast-exp 1 :fast-math 1 'speed 3))
+
+(macrolet ((mkexp ((xtype xbase) &body code)
+             `(def layered-method emit-exp-c-code :in cuda-target
+                (stream (type ,(eql-spec-if #'keywordp xtype))
+                        (base ,(eql-spec-if #'numberp xbase))
+                        arg)
+                (if (cuda-optimize-fast-exp?)
+                    (with-c-code-emitter-lexicals (stream)
+                      ,@code)
+                    (call-next-method)))))
+  (mkexp (:float 10)    (code "__exp10f(" arg ")"))
+  (mkexp (:float null)  (code "__expf(" arg ")"))
+  (mkexp (:float real)  (code "__expf(" arg "*" (log (float base 1.0)) ")"))
+  (mkexp (:float t)     (code "__powf(" base "," arg ")")))
+
+;; Min/max builtins
+
+(def function cuda-minmax-function (form stem)
+  (multiple-value-bind (pre post)
+      (ecase (form-c-type-of form)
+        (:int32 "")
+        (:uint32 "u")
+        (:int64 "ll")
+        (:uint64 "ull")
+        (:float (values "f" "f"))
+        (:double "f"))
+    (concatenate 'string pre stem (or post ""))))
+
+(def (is-statement? :in cuda-target) min (&rest args) nil)
+
+(def (c-code-emitter :in cuda-target) min (&rest args)
+  (emit-function-tree -stream- (cuda-minmax-function -form- "min") (treeify-list args)))
+
+(def (is-statement? :in cuda-target) max (&rest args) nil)
+
+(def (c-code-emitter :in cuda-target) max (&rest args)
+  (emit-function-tree -stream- (cuda-minmax-function -form- "max") (treeify-list args)))

@@ -637,11 +637,11 @@
 
 ;; Logarithm
 
-(macrolet ((mklog ((xtype xbase) &body code)
+(macrolet ((mklog ((xtype xbase &optional (atype t)) &body code)
              `(def layered-method emit-log-c-code
                 (stream (type ,(eql-spec-if #'keywordp xtype))
                         (base ,(eql-spec-if #'numberp xbase))
-                        arg)
+                        (arg ,atype))
                 (with-c-code-emitter-lexicals (stream)
                   ,@code))))
   (def layered-function emit-log-c-code (stream type base arg)
@@ -658,11 +658,17 @@
   (mklog (:float 10)    (code "log10f(" arg ")"))
   (mklog (:float 2)     (code "log2f(" arg ")"))
   (mklog (:float null)  (code "logf(" arg ")"))
-  (mklog (:float real)  (code "(logf(" arg ")/" (log (float base 1.0)) ")"))
+  (mklog (:float null real)
+         (code (log (float arg 1.0))))
+  (mklog (:float real real)
+         (code (log (float arg 1.0) base)))
   (mklog (:double 10)   (code "log10(" arg ")"))
   (mklog (:double 2)    (code "log2(" arg ")"))
   (mklog (:double null) (code "log(" arg ")"))
-  (mklog (:double real) (code "(log(" arg ")/" (log (float base 1.0d0)) ")")))
+  (mklog (:double null real)
+         (code (log (float arg 1.0d0))))
+  (mklog (:double real real)
+         (code (log (float arg 1.0d0) base))))
 
 (def float-builtin log (arg &optional base)
   (emit-log-c-code -stream- (form-c-type-of -form-) (or (constant-number-value base) base) arg))
