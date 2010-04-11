@@ -21,7 +21,8 @@
                :trivial-garbage)
   :components ((:module "core"
                 :components ((:file "package")
-                             (:file "typedefs" :depends-on ("package"))
+                             (:file "conditions" :depends-on ("package"))
+                             (:file "typedefs" :depends-on ("package" "conditions"))
                              (:file "utils" :depends-on ("typedefs"))
                              (:file "buffers" :depends-on ("typedefs" "utils"))
                              (:file "foreign-buf" :depends-on ("buffers"))

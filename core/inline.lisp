@@ -29,7 +29,7 @@
              collect (cons arg (default-value-of arg)) into key-args
              else when (typep arg 'auxiliary-function-argument-form)
              collect (cons arg (default-value-of arg)) into aux-args
-             else do (error "Invalid argument type: ~S" arg)
+             else do (gpu-code-error arg "Invalid argument type.")
              finally (return (values rq-args opt-args key-args aux-args))))
          (val-cnt (length arg-vals))
          (rq-cnt (length rq-args))
@@ -48,7 +48,7 @@
                for (key val) on rest-vals by #'cddr
                for item = (assoc (if (typep key 'constant-form)
                                      (value-of key)
-                                     (error "Must be a keyword constant: ~S" key))
+                                     (gpu-code-error key "Must be a keyword constant."))
                                  key-args :key #'effective-keyword-name-of)
                when item
                do (progn
@@ -57,10 +57,10 @@
                     (deletef key-args item))
                else do (if (allow-other-keys? arg-mixin)
                            (push (cons (make-lexical-binding arg-mixin) val) res-args)
-                           (error "Unknown key argument in call to ~S: ~S ~S"
-                                  (if (typep arg-mixin 'named-walked-form)
-                                      (name-of arg-mixin) 'lambda)
-                                  (value-of key) (unwalk-form val)))
+                           (gpu-code-error val "Unknown key argument in call to ~S: ~S"
+                                           (if (typep arg-mixin 'named-walked-form)
+                                               (name-of arg-mixin) 'lambda)
+                                           (value-of key)))
                finally (progn
                          (return (nconc (nreverse res-args) key-args))))
             aux-args)))
@@ -104,7 +104,7 @@
 
 (def function check-non-recursive (func form)
   (when (member func *function-inline-stack*)
-    (error "Recursive call detected: ~S" (unwalk-form form))))
+    (gpu-code-error form "Recursive call detected.")))
 
 (def macro with-inline-stack (objects &body code)
   `(let ((*function-inline-stack*
@@ -154,8 +154,7 @@
 
   ;; Reject random calls
   (:method ((form lexical-application-form))
-    (error "Unwalked lexical function calls not supported: ~S"
-           (unwalk-form form)))
+    (gpu-code-error form "Unwalked lexical function calls not supported."))
 
   ;; Inline specific call variants
   (:method ((form walked-lexical-application-form))
@@ -184,19 +183,18 @@
                                   (rest-function-argument-form
                                    (unless (find-form-by-name (name-of arg) (declarations-of defn)
                                                               :type 'variable-ignorable-declaration-form)
-                                     (error "The rest argument must be ignored in multiple-value-call"))
+                                     (gpu-code-error form "The rest argument must be ignored in multiple-value-call."))
                                    (remove-form-by-name! (declarations-of defn) (name-of arg)
                                                          :type 'variable-declaration-form))
                                   (t
-                                   (error "Unsupported arg type in multiple-value-call inline: ~S"
-                                          arg))))))
+                                   (gpu-code-error arg "Unsupported arg type in multiple-value-call inline."))))))
           (check-non-recursive src-defn form)
           (change-class defn (if (typep defn 'block-lambda-function-form)
                                  'block-multiple-value-bind-form 'multiple-value-bind-form))
           (setf (bindings-of defn) (join-call-arguments (mapcar #'list args)))
           (setf (value-of defn) (if (null (cdr (arguments-of form)))
                                     (car (arguments-of form))
-                                    (error "Only one argument allowed in multiple-value-call")))
+                                    (gpu-code-error form "Only one argument allowed in multiple-value-call.")))
           (adjust-parents (value-of defn))
           (with-inline-stack (defn src-defn)
             (inline-functions defn))))))
@@ -270,8 +268,7 @@
       (labels ((close-special-var (form)
                  (when (typep (parent-of form)
                               '(or setq-form multiple-value-setq-form))
-                   (warn "Write to special variable ~S has been localized."
-                         (name-of form)))
+                   (warn-gpu-style form "Write to a special variable has been localized."))
                  (let ((arg-def
                         (or (cdr (assoc (name-of form) arg-cache))
                             ;; Add a new aux argument
@@ -283,7 +280,7 @@
                                 (setf type (declared-type-of (parent-of form))))
                               ;; Assert that the type is known
                               (when (unknown-type? type)
-                                (error "Unknown global variable type: ~S" name))
+                                (gpu-code-error form "Unknown global variable type: ~S" name))
                               ;; Create the argument
                               (let* ((new-id (make-symbol (string name)))
                                      (arg (with-form-object (arg 'auxiliary-function-argument-form tree
@@ -311,8 +308,7 @@
                                        :definition (cdr it))
                          (close-special-var form)))
                    (unwalked-lexical-variable-reference-form
-                    (error "Closing over lexical variables is not supported: ~S"
-                           (unwalk-form form)))
+                    (gpu-code-error form "Closing over lexical variables is not supported."))
                    ((or lexical-variable-binder-form multiple-value-bind-form)
                     (dolist (var (bindings-of form))
                       (setf (special-binding? var) nil)))
@@ -323,7 +319,7 @@
                          ;; Likewise, convert throw to return-from
                          (change-class form 'return-from-form
                                        :target-block (cdr it) :result (value-of form))
-                         (error "Throw without a catch: ~S" (unwalk-form form)))))))
+                         (gpu-code-error form "Throw without a catch."))))))
         (dolist (item (body-of tree))
           (walk-tree-with-specials item #'visitor))))))
 

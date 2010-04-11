@@ -129,8 +129,6 @@
 
 (def macro symbol-gpu-function (s) `(get ,s 'gpu-function))
 
-(defparameter *cur-gpu-function* nil)
-
 (def class* gpu-function (save-slots-mixin)
   ((name           :documentation "Lisp name of the function")
    (c-name         :documentation "C name of the function")
@@ -164,8 +162,6 @@
                         (setf (slot-value ,object 'invoker-fun)
                               (function ,(invoker-form-of object))))
                 init))))
-
-(defparameter *cur-gpu-module* nil)
 
 (def class* gpu-module (save-slots-mixin)
   ((name            :documentation "Lisp name of the module")

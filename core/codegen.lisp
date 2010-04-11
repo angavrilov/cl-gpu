@@ -268,12 +268,12 @@
 (def layered-function emit-call-c-code (name form stream &key)
   (:method (name form stream &key)
     (declare (ignore stream))
-    (error "Unsupported function: ~A in ~S" name (unwalk-form form))))
+    (gpu-code-error form "Unsupported function: ~S" name)))
 
 (def layered-function emit-assn-c-code (name form stream &key)
   (:method (name form stream &key)
     (declare (ignore stream))
-    (error "Unsupported l-value function: ~A in ~S" name (unwalk-form form))))
+    (gpu-code-error form "Unsupported l-value function: ~S" name)))
 
 (def macro with-c-code-emitter-lexicals ((stream) &body code)
   `(macrolet ((emit (format &rest args)
@@ -339,7 +339,7 @@
   ;; Nice error message
   (:method ((form walked-form) stream &key)
     (declare (ignore stream))
-    (error "This form is not supported in GPU code: ~S" (unwalk-form form)))
+    (gpu-code-error form "This form is not supported in GPU code."))
 
   ;; Verbatim helpers
   (:method ((form number) stream &key)
@@ -526,7 +526,7 @@
 
   (:method ((form go-form) stream &key)
     (unless (c-name-of (tag-of form))
-      (error "Uninitialized GO tag: ~S" (name-of form)))
+      (gpu-code-error form "Uninitialized GO tag: ~S" (name-of form)))
     (format stream "goto ~A" (c-name-of (tag-of form))))
 
   ;; Block & return
@@ -543,7 +543,7 @@
 
   (:method ((form return-from-form) stream &key)
     (unless (c-name-of (target-block-of form))
-      (error "Uninitialized RETURN-FROM tag: ~S" (name-of form)))
+      (gpu-code-error form "Uninitialized RETURN-FROM tag: ~S" (name-of form)))
     (assert (nop-form? (result-of form)))
     (format stream "goto ~A" (c-name-of (target-block-of form))))
 

@@ -347,8 +347,7 @@
                (assert (is-statement? alt))
                (flatten-statements alt)))
             (t
-             (error "Could not inline multiple-value assignment: ~S"
-                    (unwalk-form form))))))
+             (gpu-code-error form "Could not inline multiple-value assignment.")))))
 
   ;; Miscellaneous statements
   (:method ((form values-form))

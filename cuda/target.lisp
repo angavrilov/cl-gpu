@@ -80,7 +80,7 @@
                            (<= size (case base
                                       ((:double :int64) 2)
                                       (t 4))))
-                (error "Invalid size ~A for tuple of ~A" size base))
+                (gpu-code-error nil "Invalid size ~A for tuple of ~A" size base))
               (format nil "~A~A"
                       (case base
                         (:int8 "char") (:uint8 "uchar")
@@ -88,7 +88,7 @@
                         (:int32 "int") (:uint32 "uint")
                         (:int64 "longlong")
                         (:float "float") (:double "double")
-                        (t (error "Invalid tuple type ~A" base)))
+                        (t (gpu-code-error nil "Invalid tuple type ~A" base)))
                       size)))
     (otherwise (call-next-method))))
 
@@ -194,7 +194,7 @@
                   (if dimension
                       (let ((idx (ensure-int-constant dimension)))
                         (unless (and (>= idx 0) (<= idx 3))
-                          (error "Invalid grid dimension index ~A in call to ~A" idx ',name))
+                          (gpu-code-error -form- "Invalid grid dimension index ~A in call to ~A" idx ',name))
                         :uint32)
                       `(:tuple :uint32 3)))
                 (def (c-code-emitter :in cuda-target) ,name (&optional dimension)
@@ -215,7 +215,7 @@
           ((:grid-fence) "__threadfence()")
           ((:system-fence) "__threadfence_system()")
           (otherwise
-           (error "Invalid CUDA barrier mode: ~S" it)))))
+           (gpu-code-error -form- "Invalid CUDA barrier mode: ~S" it)))))
 
 ;; Fast arithmetics
 

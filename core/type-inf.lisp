@@ -28,24 +28,24 @@
            `((def (type :export ,(getf -options- :export)) ,name ,args
                ,@code)))))
 
-(def function parse-atomic-type (type-spec)
+(def function parse-atomic-type (type-spec &key form)
   (or (lisp-to-foreign-type type-spec)
-      (error "Unknown atomic type: ~S" type-spec)))
+      (gpu-code-error form "Unknown atomic type: ~S" type-spec)))
 
-(def function parse-global-type (type-spec)
+(def function parse-global-type (type-spec &key form)
   (multiple-value-bind (rspec expanded?)
       (expand-gpu-type (ensure-car type-spec)
                        (if (consp type-spec) (cdr type-spec)))
     (cond (expanded?
-           (parse-global-type rspec))
+           (parse-global-type rspec :form form))
           ((consp type-spec)
            (ecase (first type-spec)
              (array
               (destructuring-bind (&optional item-type dim-spec) (rest type-spec)
                 (when (or (null item-type) (eql item-type '*)
                           (null dim-spec) (eql dim-spec '*))
-                  (error "Insufficiently specific type spec: ~S" type-spec))
-                (values (parse-atomic-type item-type)
+                  (gpu-code-error form "Insufficiently specific type spec: ~S" type-spec))
+                (values (parse-atomic-type item-type :form form)
                         (if (numberp dim-spec)
                             (make-array dim-spec :initial-element nil)
                             (coerce (mapcar (lambda (x) (if (numberp x) x nil)) dim-spec)
@@ -53,27 +53,27 @@
              (vector
               (destructuring-bind (&optional item-type dim-spec) (rest type-spec)
                 (when (or (null item-type) (eql item-type '*))
-                  (error "Insufficiently specific type spec: ~S" type-spec))
-                (values (parse-atomic-type item-type)
+                  (gpu-code-error form "Insufficiently specific type spec: ~S" type-spec))
+                (values (parse-atomic-type item-type :form form)
                         (if (numberp dim-spec) (vector dim-spec) (vector nil)))))))
           (t
-           (parse-atomic-type type-spec)))))
+           (parse-atomic-type type-spec :form form)))))
 
-(def function parse-local-type (type-spec)
+(def function parse-local-type (type-spec &key form)
   (if (unknown-type? type-spec)
       nil
       (cond ((and (consp type-spec)
                   (eq (car type-spec) 'tuple))
              `(:tuple ,(third type-spec)
-                      ,(parse-atomic-type (second type-spec))))
+                      ,(parse-atomic-type (second type-spec) :form form)))
             (t
              (multiple-value-bind (item dims)
-                 (parse-global-type type-spec)
+                 (parse-global-type type-spec :form form)
                (if dims `(:pointer ,item) item))))))
 
 (def function get-local-var-decl-type (pdecls name)
   (aif (find-form-by-name name pdecls :type 'type-declaration-form)
-       (values (parse-local-type (declared-type-of it))
+       (values (parse-local-type (declared-type-of it) :form it)
                (declared-type-of it))))
 
 ;;; Type properties
@@ -214,21 +214,17 @@
                   (t it)))
          (status (or (member stype allow :test #'equal)
                      (can-promote-type? stype dest-type))))
-    (cond ((or (null status)
-               (and (eq status :warn) error-on-warn?))
-           (error "Cannot cast ~S to ~S in ~A~@[~S~%Of form ~]~S"
-                  stype dest-type (or prefix "")
-                  (if (and (not (eq src-type-or-form form))
-                           (typep src-type-or-form 'walked-form))
-                      (unwalk-form src-type-or-form))
-                  (unwalk-form form)))
-          ((and warn? (eq status :warn))
-           (warn "Implicit cast of ~S to ~S in ~A~@[~S~%Of form ~]~S"
-                 stype dest-type (or prefix "")
-                 (if (and (not (eq src-type-or-form form))
-                          (typep src-type-or-form 'walked-form))
-                     (unwalk-form src-type-or-form))
-                 (unwalk-form form))))
+    (flet ((report (func msg)
+             (funcall func form msg
+                      stype dest-type (or prefix "")
+                      (if (and (not (eq src-type-or-form form))
+                               (typep src-type-or-form 'walked-form))
+                          (unwalk-form src-type-or-form)))))
+      (cond ((or (null status)
+                 (and (eq status :warn) error-on-warn?))
+             (report #'gpu-code-error "Cannot cast ~S to ~S in ~A~@[~S~]"))
+            ((and warn? (eq status :warn))
+             (report #'warn-gpu-style "Implicit cast of ~S to ~S in ~A~@[~S~]"))))
     dest-type))
 
 (def function int-value-matches-type? (type value)
@@ -242,11 +238,11 @@
 (def function verify-array (arr)
   (let ((arr/type (form-c-type-of arr)))
     (unless (array-c-type? arr/type)
-      (error "Must be an array: ~S" (unwalk-form arr)))))
+      (gpu-code-error arr "Must be an array."))))
 
 (def function verify-array-var (arr)
   (unless (typep arr 'walked-lexical-variable-reference-form)
-    (error "Must be a variable: ~S" (unwalk-form arr)))
+    (gpu-code-error arr "Must be a variable."))
   (verify-array arr))
 
 (def function wrap-values-type (types)
@@ -284,25 +280,25 @@
 (def function make-local-c-name (name)
   (unique-c-name name (unique-name-tbl-of *cur-gpu-function*)))
 
-(def function check-fixed-dims (dims type-spec)
+(def function check-fixed-dims (form dims type-spec)
   (when (and dims (not (every #'numberp dims)))
-    (error "Local arrays must have fixed dimensions: ~S" type-spec)))
+    (gpu-code-error form "Local arrays must have fixed dimensions: ~S" type-spec)))
 
-(def function make-local-var (name type-spec &key from-c-type? (c-name (make-local-c-name name)))
+(def function make-local-var (name type-spec &key from-c-type? (c-name (make-local-c-name name)) form)
   (multiple-value-bind (item-type dims)
       (if from-c-type?
           type-spec
-          (parse-global-type type-spec))
-    (check-fixed-dims dims type-spec)
+          (parse-global-type type-spec :form form))
+    (check-fixed-dims form dims type-spec)
     (make-instance 'gpu-local-var
                    :name name :c-name c-name
                    :item-type item-type :dimension-mask dims)))
 
-(def function make-shared-var (identity type-spec decl-type)
+(def function make-shared-var (identity type-spec decl-type &key form)
   (or (find identity (shared-vars-of *cur-gpu-function*) :key #'identity-of)
       (multiple-value-bind (item-type dims)
-          (if type-spec (parse-global-type type-spec) decl-type)
-        (check-fixed-dims dims (or type-spec decl-type))
+          (if type-spec (parse-global-type type-spec :form form) decl-type)
+        (check-fixed-dims form dims (or type-spec decl-type))
         (let* ((name (name-of identity))
                (var (make-instance 'gpu-shared-var :name name
                                    :c-name (make-local-c-name name)
@@ -324,7 +320,7 @@
 (def layered-function compute-call-type (name form &key upper-type)
   (:method (name form &key upper-type)
     (declare (ignore upper-type))
-    (error "Unsupported function: ~A in ~S" name (unwalk-form form))))
+    (gpu-code-error form "Unsupported function: ~A" name)))
 
 (def layered-function propagate-assn-arg-types (name form &key upper-type)
   (:method (name form &key upper-type)
@@ -336,7 +332,7 @@
 (def layered-function compute-assn-type (name form &key upper-type)
   (:method (name form &key upper-type)
     (declare (ignore upper-type))
-    (error "Unsupported l-value function: ~A in ~S" name (unwalk-form form))))
+    (gpu-code-error form "Unsupported l-value function: ~A" name)))
 
 (def layered-methods propagate-c-types
   ;; Generic
@@ -344,17 +340,17 @@
     (declare (ignore upper-type))
     (let ((rtype (call-next-method)))
       (when (null rtype)
-        (error "Cannot determine type of: ~S" (unwalk-form form)))
+        (gpu-code-error form "Cannot determine type."))
       (setf (form-c-type-of form) rtype)))
 
   (:method ((form walked-form) &key upper-type)
     (declare (ignore upper-type))
-    (error "This form is not supported in GPU code: ~S" (unwalk-form form)))
+    (gpu-code-error form "This form is not supported in GPU code."))
 
   ;; Type cast
   (:method ((form the-form) &key upper-type)
     (declare (ignore upper-type))
-    (let* ((cast-type (parse-local-type (declared-type-of form)))
+    (let* ((cast-type (parse-local-type (declared-type-of form) :form form))
            (arg-type (propagate-c-types (value-of form) :upper-type cast-type)))
       (when (null cast-type)
         (setf cast-type arg-type))
@@ -386,7 +382,7 @@
              ((int-value-matches-type? :uint64 it)
               :uint64)
              (t
-              (error "Integer value ~A is too big." it))))
+              (gpu-code-error form "Integer value ~A is too big." it))))
       (single-float
        (if (eq upper-type :double)
            :double :float))
@@ -396,7 +392,7 @@
        (cond ((and (null it) (eq upper-type :void))
               :void)
              (t :boolean)))
-      (t (error "Cannot use constant ~S in C code." it))))
+      (t (gpu-code-error form "Cannot use constant ~S in C code." it))))
 
   ;; Assignment
   (:method ((form setq-form) &key upper-type)
@@ -404,7 +400,7 @@
            (val-type (propagate-c-types (value-of form)
                                         :upper-type target-type)))
       (when (eq (ensure-car target-type) :pointer)
-        (error "Assignment of arrays is not supported."))
+        (gpu-code-error form "Assignment of arrays is not supported."))
       (verify-cast val-type target-type (variable-of form)
                    :prefix "assignment to ")
       (if (eq upper-type :void) :void target-type)))
@@ -420,10 +416,9 @@
          for val-type = (car rtype)
          do (progn
               (unless val-type
-                (error "Too few values: ~S in multiple-value-setq: ~S"
-                       value-type (unwalk-form (value-of form))))
+                (gpu-code-error form "Too few values: ~S in multiple-value-setq." value-type))
               (when (eq (ensure-car val-type) :pointer)
-                (error "Assignment of arrays is not supported."))
+                (gpu-code-error form "Assignment of arrays is not supported."))
               (verify-cast val-type var-type var :prefix "assignment to ")))
       (if (eq upper-type :void) :void (first type-list))))
 
@@ -433,9 +428,9 @@
           (upper-types (unwrap-values-type upper-type)))
       (cond ((values-c-type? upper-type)
              (unless (>= (length args) (length (rest upper-type)))
-               (error "Expecting ~A values, found only ~A: ~S"
-                      (length (rest upper-type))
-                      (length args) (unwalk-form form)))
+               (gpu-code-error form "Expecting ~A values, found only ~A."
+                               (length (rest upper-type))
+                               (length args)))
              (loop for arg in args
                 for rtype = upper-types then (cdr rtype)
                 do (propagate-c-types arg :upper-type (if rtype (car rtype) :void))))
@@ -493,7 +488,7 @@
   (:method ((form go-form) &key upper-type)
     (declare (ignore upper-type))
     (unless (tag-of form)
-      (error "Unknown GO tag: ~S" (name-of form)))
+      (gpu-code-error form "Unknown GO tag: ~S" (name-of form)))
     :void)
 
   (:method ((form block-form) &key upper-type)
@@ -510,7 +505,7 @@
     (declare (ignore upper-type))
     (let ((blk (target-block-of form)))
       (unless blk
-        (error "Unknown return tag: ~S" (name-of form)))
+        (gpu-code-error form "Unknown return tag: ~S" (name-of form)))
       (let ((vtype (propagate-c-types (result-of form)
                                       :upper-type (form-c-type-of blk)))
             (btype (form-c-type-of blk)))
@@ -549,12 +544,13 @@
                                         (dtype `(array ,etype ,(ensure-list (ensure-constant dims)))))
                                    (if lisp-decl-type
                                        (unless (equal lisp-decl-type dtype)
-                                         (error "~A does not agree with declaration ~A"
-                                                (unwalk-form init-form) lisp-decl-type))
+                                         (gpu-code-error init-form
+                                                         "Initform does not agree with declaration ~A"
+                                                         lisp-decl-type))
                                        (setf lisp-decl-type dtype))
                                    (setf (initial-value-of form) nil
                                          init-form nil)
-                                   (parse-local-type dtype))))))
+                                   (parse-local-type dtype :form init-form))))))
                           (propagate-c-types init-form :upper-type decl-type))))
       (cond ((null decl-type)
              (setf decl-type init-type))
@@ -568,19 +564,19 @@
                           :prefix "variable initialization ")))
       (cond ((shared-identity-of form)
              (when (or (initial-value-of form) values-init-type)
-               (error "Shared variables cannot have initialization forms."))
+               (gpu-code-error form "Shared variables cannot have initialization forms."))
              (setf (gpu-variable-of form)
                    (make-shared-var (shared-identity-of form)
                                     lisp-decl-type decl-type)))
             ((array-c-type? decl-type)
              (when values-init-type
-               (error "Arrays cannot be assigned through (values)."))
+               (gpu-code-error form "Arrays cannot be assigned through (values)."))
              (setf (gpu-variable-of form)
                    (if init-form
                        (ensure-gpu-var init-form)
                        (make-local-var (name-of form) lisp-decl-type)))
              (unless (array-var? (gpu-variable-of form))
-               (error "Must be an array variable: ~S" (unwalk-form form)))))
+               (gpu-code-error form "Must be an array variable."))))
       decl-type))
 
   (:method ((form lexical-variable-binder-form) &key upper-type)
@@ -600,8 +596,7 @@
          for rtype = (unwrap-values-type value-type) then (cdr rtype)
          for val-type = (car rtype)
          do (unless val-type
-              (error "Too few values: ~S in multiple-value-bind: ~S"
-                     value-type (unwalk-form (value-of form))))
+              (gpu-code-error form "Too few values: ~S in multiple-value-bind." value-type))
          do (propagate-c-types var :values-init-type val-type)))
     (call-next-method))
 

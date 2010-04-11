@@ -100,11 +100,11 @@
 
 (def (function e) barrier (&optional mode)
   (declare (ignore mode))
-  (error "Barriers are only supported in GPU code"))
+  (cerror "continue" "Barriers are only supported in GPU code"))
 
 (def type-computer barrier (&optional mode)
   (unless (or (null mode) (eq mode/type :keyword))
-    (error "Must be a keyword constant: ~S" (unwalk-form mode)))
+    (gpu-code-error -form- "Barrier type must be a keyword constant."))
   :void)
 
 ;;; AREF
@@ -119,7 +119,7 @@
       (verify-array-var arr)
       (unless (= (length (dimension-mask-of (ensure-gpu-var arr)))
                  (+ (length indexes) index-bias))
-        (error "Incorrect array index count in ~S" (unwalk-form form)))
+        (gpu-code-error form "Incorrect array index count."))
       (dolist (idx indexes)
         (recurse idx :upper-type :uint32))
       (when v-p
@@ -323,7 +323,7 @@
         (gvar (ensure-gpu-var var)))
     (unless (and (>= cval 0)
                  (< cval (length (dimension-mask-of gvar))))
-      (error "Dimension index out of bounds: ~S" (unwalk-form -form-))))
+      (gpu-code-error -form- "Dimension index out of bounds: ~S" cval)))
   :uint32)
 
 (def type-computer array-raw-stride (var dimidx)
@@ -332,7 +332,7 @@
         (gvar (ensure-gpu-var var)))
     (unless (and (>= cval 0)
                  (< cval (1- (length (dimension-mask-of gvar)))))
-      (error "Stride index out of bounds: ~S" (unwalk-form -form-))))
+      (gpu-code-error -form- "Stride index out of bounds: ~S" cval)))
   :uint32)
 
 (def c-code-emitter array-total-size (var)
@@ -378,7 +378,7 @@
 (def type-computer untuple (tuple)
   (unless (and (consp tuple/type)
                (eq (first tuple/type) :tuple))
-    (error "Must be a tuple expression: ~A" (unwalk-form tuple)))
+    (gpu-code-error -form- "The argument must be a tuple expression."))
   (let ((size (min (second tuple/type)
                    (length (unwrap-values-type -upper-type-))))
         (base (third tuple/type)))
@@ -394,8 +394,7 @@
          (dims (dimension-mask-of gpu-var))
          (size (aref dims (1- (length dims)))))
     (unless (integerp size)
-      (error "The array must have a constant last dimension: ~A"
-             (unwalk-form arr)))
+      (gpu-code-error (parent-of arr) "The array argument must have a constant last dimension."))
     `(:tuple ,size ,(second type))))
 
 (def function tuple-aref-cprefix (form)
@@ -561,7 +560,7 @@
 (def function ensure-bitwise-result (args-or-types form &key prefix)
   (aprog1 (ensure-arithmetic-result args-or-types form :prefix prefix)
     (when (member it '(:float :double))
-      (error "Floating-point arguments not allowed: ~S" (unwalk-form form)))))
+      (gpu-code-error form "Floating-point arguments not allowed."))))
 
 (def definer bitwise-builtin (name args &body code)
   `(progn
@@ -653,8 +652,8 @@
       (emit-log-c-code stream type nil base)
       (write-string ")" stream))
     (:method (stream type (base null) arg)
-      (declare (ignore stream arg))
-      (error "Invalid return type in emit-log-c-code: ~A" type)))
+      (declare (ignore stream))
+      (gpu-code-error arg "Invalid return type in emit-log-c-code: ~A" type)))
   (mklog (:float 10)    (code "log10f(" arg ")"))
   (mklog (:float 2)     (code "log2f(" arg ")"))
   (mklog (:float null)  (code "logf(" arg ")"))
@@ -839,7 +838,7 @@
 
 (def type-computer min (&rest args)
   (when (null args)
-    (error "Cannot use MIN without arguments."))
+    (gpu-code-error -form- "Cannot use MIN without arguments."))
   (ensure-arithmetic-result args -form-))
 
 (def c-code-emitter min (&rest args)
@@ -852,7 +851,7 @@
 
 (def type-computer max (&rest args)
   (when (null args)
-    (error "Cannot use MAX without arguments."))
+    (gpu-code-error -form- "Cannot use MAX without arguments."))
   (ensure-arithmetic-result args -form-))
 
 (def c-code-emitter max (&rest args)

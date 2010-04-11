@@ -18,8 +18,7 @@
                     (adecl (find-form-by-name aname top-decls
                                               :type 'type-declaration-form)))
                (unless adecl
-                 (error "Type not declared for ~A parameter ~S of ~S"
-                        title aname func-name))
+                 (gpu-code-error aform "Type not declared for ~A parameter." title))
                (multiple-value-bind (item-type dims)
                    (parse-global-type (declared-type-of adecl))
                  (aprog1 (make-instance 'gpu-argument
@@ -31,29 +30,28 @@
                                                            (unwalk-form default-value)))
                          (setf (gpu-variable-of aform) it))))))
       (when (allow-other-keys? lambda-form)
-        (error "Allow other keys is not allowed for ~As." title))
+        (gpu-code-error lambda-form "Allow other keys is not allowed for ~As." title))
       (mapcar (lambda (aform)
                 (etypecase aform
                   (required-function-argument-form
                    (extract-arg aform))
                   (optional-function-argument-form
-                   (error "Optional arguments are not allowed for ~As." title))
+                   (gpu-code-error aform "Optional arguments are not allowed for ~As." title))
                   (rest-function-argument-form
-                   (error "Rest arguments are not allowed for ~As." title))
+                   (gpu-code-error aform "Rest arguments are not allowed for ~As." title))
                   (keyword-function-argument-form
                    (unless kernel?
-                     (error "Keyword arguments are not allowed for ~As." title))
+                     (gpu-code-error aform "Keyword arguments are not allowed for ~As." title))
                    (when (supplied-p-parameter-name-of aform)
-                     (error "Supplied flags are not allowed for ~As." title))
+                     (gpu-code-error aform "Supplied flags are not allowed for ~As." title))
                    (extract-arg aform
                                 :keyword (effective-keyword-name-of aform)
                                 :default-value (default-value-of aform)))
                   (auxiliary-function-argument-form
                    (unless kernel?
-                     (error "Auxillary arguments are not allowed for ~As." title))
+                     (gpu-code-error aform "Auxillary arguments are not allowed for ~As." title))
                    (unless (default-value-of aform)
-                     (error "Auxillary arguments must have a default value: ~S"
-                            (unwalk-form aform)))
+                     (gpu-code-error aform "Auxillary arguments must have a default value."))
                    (extract-arg aform :default-value (default-value-of aform)))))
               (bindings-of lambda-form)))))
 
@@ -83,14 +81,14 @@
           (base-env (make-walk-environment environment)))
       (flet ((add-variables (type-spec names &key constantp)
                (when (null names)
-                 (error "No variable names specified for type ~S" type-spec))
+                 (gpu-code-error nil "No variable names specified for type ~S" type-spec))
                (multiple-value-bind (item-type dims)
                    (parse-global-type type-spec)
                  (dolist (name names)
                    (unless (symbolp name)
-                     (error "Invalid module global name ~S" name))
+                     (gpu-code-error nil "Invalid module global name ~S" name))
                    (when (find name var-list :key #'name-of)
-                     (error "Module global ~S is already defined" name))
+                     (gpu-code-error nil "Module global ~S is already defined" name))
                    (let* ((var (make-instance 'gpu-global-var
                                               :name name :c-name (unique-c-name name id-table)
                                               :item-type item-type :dimension-mask dims
@@ -102,11 +100,11 @@
         ;; Collect the global variables
         (dolist (item spec)
           (unless (consp item)
-            (error "Invalid gpu module spec item: ~S" item))
+            (gpu-code-error nil "Invalid gpu module spec item: ~S" item))
           (ecase (first item)
             ((:name)
              (when name
-               (error "Name is already specified for gpu module ~S" name))
+               (gpu-code-error nil "Name is already specified for gpu module ~S" name))
              (setf name (second item)))
             ((:variable :global)
              (destructuring-bind (name type) (rest item)
@@ -231,13 +229,13 @@
             (gpu-module it)
             ;; Just in case, look up symbols dynamically
             (symbol (or (find-gpu-module it)
-                        (error "Unknown GPU module: ~S" it)))
+                        (gpu-code-error nil "Unknown GPU module: ~S" it)))
             ;; An ad-hoc module specification: parse it
             (cons
              (values (parse-gpu-module-spec it :environment env) t))
             ;; Junk
             (t
-             (error "Invalid GPU module: ~S" name-or-spec)))))
+             (gpu-code-error nil "Invalid GPU module: ~S" name-or-spec)))))
     (when own-module?
       (compile-gpu-module module))
     (wrap-gpu-module-bindings

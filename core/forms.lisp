@@ -153,7 +153,7 @@
                            :arguments (arguments-of target))
              (adjust-parents (arguments-of setf)))
             (t
-             (error "Not an lvalue form: ~S" (unwalk-form target)))))
+             (gpu-code-error target "Not an lvalue form."))))
         (setf (value-of setf) (recurse (third -form-) setf)))))
 
 (def unwalker setf-application-form (value)
@@ -277,7 +277,7 @@
 (def declaration-walker gpu-optimize (&rest specs)
   (do-list-collect (optimize-spec specs)
     (unless (member (ensure-car optimize-spec) *known-optimize-flags*)
-      (warn "Unknown GPU optimize setting: ~S" optimize-spec))
+      (simple-walker-style-warning "Unknown GPU optimize setting: ~S" optimize-spec))
     (make-declaration 'gpu-optimize-declaration-form :specification optimize-spec)))
 
 (defparameter *optimize-flags* '((safety 1) (debug 1)))
@@ -325,22 +325,22 @@
 
 (def function ensure-gpu-var (ref)
   (unless (typep ref 'walked-lexical-variable-reference-form)
-    (error "Must be a local variable reference: ~S" (unwalk-form ref)))
+    (gpu-code-error ref "Must be a local variable reference."))
   (let ((defn (definition-of ref)))
     (unless defn
-      (error "Undefined variable reference: ~S" (unwalk-form ref)))
+      (gpu-code-error ref "Undefined variable reference."))
     (or (gpu-variable-of defn)
-        (error "Unallocated variable reference: ~S" (unwalk-form ref)))))
+        (gpu-code-error ref "Unallocated variable reference."))))
 
 (def function ensure-constant (obj)
   (unless (typep obj 'constant-form)
-    (error "Must be a constant: ~S" (unwalk-form obj)))
+    (gpu-code-error obj "Must be a constant."))
   (value-of obj))
 
 (def function ensure-int-constant (obj)
   (aprog1 (ensure-constant obj)
     (unless (typep it 'integer)
-      (error "Must be an integer constant: ~S" it))))
+      (gpu-code-error obj "Must be an integer constant."))))
 
 (def function unwrap-keyword-const (val)
   (if (and (typep val 'constant-form)
@@ -453,8 +453,7 @@
 (def function mark-mutated-vars (tree)
   (flet ((mark-var (variable form)
            (unless (typep variable 'walked-lexical-variable-reference-form)
-             (error "Setting non-lexical variables is not supported: ~S"
-                    (unwalk-form form)))
+             (gpu-code-error form "Setting non-lexical variables is not supported."))
            (setf (assigned-to? (definition-of variable)) t)))
     (map-ast (lambda (form)
                (typecase form
@@ -466,3 +465,27 @@
                form)
              tree)))
 
+(def function extract-function-stack (form &key gpu-function)
+  (cond (form
+         (loop for cur = form then (parent-of cur)
+            while cur
+            when (typecase cur
+                   ((or block-let-form block-multiple-value-bind-form
+                        block-lambda-function-form)
+                    t))
+            collect (name-of cur)))
+        (gpu-function
+         (list (name-of gpu-function)))))
+
+(def method print-object :after ((obj gpu-code-condition) stream)
+  (unless *print-escape*
+    (when (or (gpu-function-of obj) (enclosing-form-of obj))
+      (format stream "~&GPU function: ~:[(unknown)~;~:*~{~S~^ in ~}~]"
+              (extract-function-stack (enclosing-form-of obj)
+                                      :gpu-function (gpu-function-of obj)))
+      (awhen (aand (gpu-module-of obj) (name-of it))
+        (format stream " of module ~S" it)))
+    (awhen (enclosing-form-of obj)
+      (let ((*print-length* 5)
+            (*print-level* 2))
+        (format stream "~&Form: ~S" (unwalk-form it))))))

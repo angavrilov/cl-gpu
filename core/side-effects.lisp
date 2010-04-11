@@ -75,11 +75,11 @@
                    ((:values r-a-w w-a-r)
                     (side-effect-conflicts effects arg-effects)))
               (when r-a-w
-                (warn "Read-after-write conflicts on ~S in ~S"
-                      (mapcar #'name-of r-a-w) (unwalk-form form)))
+                (warn-gpu-style form "Read-after-write conflicts on ~S"
+                                (mapcar #'name-of r-a-w)))
               (when w-a-r
-                (warn "Write-after-read conflicts on ~S in ~S"
-                      (mapcar #'name-of w-a-r) (unwalk-form form)))
+                (warn-gpu-style form "Write-after-read conflicts on ~S"
+                                (mapcar #'name-of w-a-r)))
               (join-side-effects effects arg-effects)))
           args :initial-value nil))
 
