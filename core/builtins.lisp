@@ -177,7 +177,7 @@
                    (code "if ")
                    (emit-separated stream checks " || ")
                    (code " ")
-                   (emit-abort-command stream "Bad index ~A for dims ~A in ~S"
+                   (emit-abort-command stream form "Bad index ~A for dims ~A in ~S"
                                        (list `(list ,@idxinfos) `(list ,@diminfos)
                                              `(quote (,(operator-of form) ,(name-of var)
                                                        ,@(mapcar #'unwalk-form indexes)))))
@@ -266,7 +266,7 @@
             (when (> access-range 1)
               (code "||(IDX+" (1- access-range) ")>=EXT"))
             (code ") ")
-            (emit-abort-command stream "Bad index ~A for extent ~A in ~S"
+            (emit-abort-command stream form "Bad index ~A for extent ~A in ~S"
                                 (list '(:uint32 "IDX") '(:uint32 "EXT")
                                       `(quote (,(operator-of form) ,(name-of var) ,(unwalk-form index)))))
             (force-emit-merged-assignment stream form 0

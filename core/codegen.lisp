@@ -43,7 +43,7 @@
 (def layered-function generate-invoker-form (obj)
   (:documentation "Creates a lambda form to invoke the kernel."))
 
-(def layered-function emit-abort-command (stream exception args)
+(def layered-function emit-abort-command (stream form exception args)
   (:documentation "Emits code that reports the specified error and aborts."))
 
 ;;; Local variables

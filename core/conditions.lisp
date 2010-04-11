@@ -40,3 +40,26 @@
 (def function warn-gpu-style (form message &rest args)
   (warn 'simple-gpu-code-style-warning :enclosing-form form
         :format-control message :format-arguments args))
+
+(def (condition* e) gpu-runtime-error (error)
+  ((gpu-module nil)
+   (call-stack nil)
+   (thread-idx nil)
+   (block-idx nil)))
+
+(def method print-object :after ((obj gpu-runtime-error) stream)
+  (unless *print-escape*
+    (format stream "~&GPU function: ~:[(unknown)~;~:*~{~S~^ in ~}~]" (call-stack-of obj))
+    (when (gpu-module-of obj)
+      (format stream " of module ~S" (gpu-module-of obj)))
+    (awhen (or (thread-idx-of obj) (block-idx-of obj))
+      (format stream "~&Thread ~S, block ~S"
+              (thread-idx-of obj) (block-idx-of obj)))))
+
+(def (condition* e) simple-gpu-runtime-error (simple-error gpu-runtime-error)
+  ())
+
+(def function simple-gpu-runtime-error (module stack message thread block &rest args)
+  (error 'simple-gpu-runtime-error :gpu-module module :call-stack stack
+         :thread-idx thread :block-idx block
+         :format-control message :format-arguments args))
