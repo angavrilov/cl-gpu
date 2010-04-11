@@ -272,7 +272,10 @@
 (def unwalker gpu-optimize-declaration-form (specification)
   `(gpu-optimize ,specification))
 
-(defparameter *known-optimize-flags* '(debug speed safety space))
+(defparameter *known-optimize-flags* '(debug speed safety space
+                                       :check-bounds :fast-math :fast-div
+                                       :fast-sin :fast-cos :fast-tan
+                                       :fast-log :fast-exp))
 
 (def declaration-walker gpu-optimize (&rest specs)
   (do-list-collect (optimize-spec specs)
