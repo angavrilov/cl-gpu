@@ -91,22 +91,25 @@
 
 (define-modify-macro push-assignments! (varlist) push-assignments)
 
+(def function push-assignments-here (form varlist)
+  (if (= (length varlist) 1)
+      (with-form-object (set 'setq-form (parent-of form) :value form)
+        (setf (parent-of form) set)
+        (setf (variable-of set)
+              (copy-ast-form (first varlist) :parent set))
+        (setf (form-c-type-of set) form))
+      (with-form-object (set 'multiple-value-setq-form (parent-of form)
+                             :value form)
+        (setf (parent-of form) set)
+        (setf (variables-of set)
+              (mapcar (lambda (var) (copy-ast-form var :parent set))
+                      varlist))
+        (setf (form-c-type-of set) form))))
+
 (def layered-function push-assignments (form varlist)
   ;; Generic case
   (:method (form varlist)
-    (if (= (length varlist) 1)
-        (with-form-object (set 'setq-form (parent-of form) :value form)
-          (setf (parent-of form) set)
-          (setf (variable-of set)
-                (copy-ast-form (first varlist) :parent set))
-          (setf (form-c-type-of set) form))
-        (with-form-object (set 'multiple-value-setq-form (parent-of form)
-                               :value form)
-          (setf (parent-of form) set)
-          (setf (variables-of set)
-                (mapcar (lambda (var) (copy-ast-form var :parent set))
-                        varlist))
-          (setf (form-c-type-of set) form))))
+    (push-assignments-here form varlist))
 
   ;; Never-returning forms
   (:method ((form tagbody-form) varlist)

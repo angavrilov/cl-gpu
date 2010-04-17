@@ -103,6 +103,8 @@
 
 ;;; Inline stack check
 
+(defparameter *global-inline-callback* nil)
+
 (defvar *function-inline-stack* nil)
 
 (def function check-non-recursive (func form)
@@ -165,7 +167,10 @@
 
   (:method ((form free-application-form))
     (aif (symbol-gpu-function (operator-of form))
-         (inline-one-call form (form-of it) (arguments-of form))
+         (progn
+           (when *global-inline-callback*
+             (funcall *global-inline-callback* it form))
+           (inline-one-call form (form-of it) (arguments-of form)))
          (call-next-method)))
 
   (:method ((form lambda-application-form))

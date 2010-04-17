@@ -393,7 +393,7 @@
 (def layered-method compile-object :in cuda-target ((function gpu-function))
   (unless (and (slot-boundp function 'body)
                (body-of function))
-    (propagate-c-types (form-of function) :upper-type :void)
+    (prepare-for-compile function)
     (compute-side-effects (form-of function))
     (flatten-statements (form-of function))
     (setf (side-effects-of function)

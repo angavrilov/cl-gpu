@@ -171,6 +171,10 @@
   (:default-initargs :return-type :void)
   (:documentation "A kernel callable from the host"))
 
+(def class* test-gpu-kernel (gpu-kernel)
+  ()
+  (:documentation "A kernel that wraps a global function for testing."))
+
 (def custom-slot-load-forms gpu-kernel
   ;; Functions are not externalizable, so expand it as an init form.
   (invoker-fun

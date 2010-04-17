@@ -73,6 +73,18 @@
                 (walk-form `(defun ,@code) :environment env))))
     (make-instance 'common-gpu-function :name (name-of form) :form form)))
 
+(def function make-gpu-global-var (name item-type dims &key
+                                        constant-var? id-table
+                                        (c-name (unique-c-name name id-table)))
+  (let* ((var (make-instance 'gpu-global-var
+                             :name name :c-name c-name
+                             :item-type item-type :dimension-mask dims
+                             :constant-var? constant-var?))
+         (form (make-instance 'global-var-binding-form :name name
+                              :gpu-variable var)))
+    (setf (form-of var) form)
+    var))
+
 (def function parse-gpu-module-spec (spec &key name environment)
   (with-active-layers (gpu-target)
     (let ((id-table (make-c-name-table))
@@ -89,14 +101,10 @@
                      (gpu-code-error nil "Invalid module global name ~S" name))
                    (when (find name var-list :key #'name-of)
                      (gpu-code-error nil "Module global ~S is already defined" name))
-                   (let* ((var (make-instance 'gpu-global-var
-                                              :name name :c-name (unique-c-name name id-table)
-                                              :item-type item-type :dimension-mask dims
-                                              :constant-var? constantp))
-                          (form (make-instance 'global-var-binding-form :name name
-                                               :gpu-variable var)))
-                     (setf (form-of var) form)
-                     (push var var-list))))))
+                   (push (make-gpu-global-var name item-type dims
+                                              :constant-var? constantp
+                                              :id-table id-table)
+                         var-list)))))
         ;; Collect the global variables
         (dolist (item spec)
           (unless (consp item)
