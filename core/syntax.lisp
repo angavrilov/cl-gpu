@@ -145,7 +145,7 @@
     `(eval-when (:compile-toplevel :load-toplevel :execute)
        ,@(when (getf -options- :export)
                `((export ',name)))
-       (setf (symbol-gpu-function ',name) ,func)
+       (register-common-gpu-function ,func)
        ,@(if (not (getf -options- :gpu-only))
              `((defun ,name ,args ,@code)))
        ',name)))

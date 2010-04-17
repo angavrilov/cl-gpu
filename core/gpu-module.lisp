@@ -124,10 +124,39 @@
 
 (def class* common-gpu-function (save-slots-mixin)
   ((name           :documentation "Lisp name of the function.")
-   (form           :documentation "Walker form tree for the code."))
+   (form           :documentation "Walker form tree for the code.")
+   (usages         (make-weak-set)
+                   :documentation "Functions that use the current one")
+   (test-modules   nil
+                   :documentation "Modules generated for testing"))
   (:documentation "A gpu function defined outside of a module"))
 
+(def method reinitialize-instance :after ((obj common-gpu-function) &key &allow-other-keys)
+  (dolist (item (list* obj (weak-set-snapshot (usages-of obj))))
+    (setf (test-modules-of item) nil))
+  (setf (usages-of obj) (make-weak-set)))
+
 (def macro symbol-gpu-function (s) `(get ,s 'gpu-function))
+
+(def method make-load-form ((object common-gpu-function) &optional env)
+  (declare (ignore env))
+  (multiple-value-bind (make init)
+      (with-exclude-save-slots (usages test-modules)
+        (call-next-method))
+    (values make
+            `(progn ,init
+                    (setf (slot-value ,object 'usages)
+                          (make-weak-set)
+                          (slot-value ,object 'test-modules)
+                          nil)))))
+
+(def function register-common-gpu-function (obj)
+  (let* ((name (name-of obj))
+         (old-instance (symbol-gpu-function name)))
+    (if old-instance
+        (reinitialize-instance old-instance :form (form-of obj))
+        (setf (symbol-gpu-function name) obj))
+    name))
 
 (def class* gpu-function (save-slots-mixin)
   ((name           :documentation "Lisp name of the function")
