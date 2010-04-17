@@ -141,29 +141,34 @@
   (:documentation "Return the integer range of the type, or NIL NIL.")
   (:method (type)
     (case type
-      (:uint8 (values 0 (1- (ash 1 8))))
-      (:int8 (values (- (ash 1 7)) (1- (ash 1 7))))
-      (:uint16 (values 0 (1- (ash 1 16))))
-      (:int16 (values (- (ash 1 15)) (1- (ash 1 15))))
-      (:uint32 (values 0 (1- (ash 1 32))))
-      (:int32 (values (- (ash 1 31)) (1- (ash 1 31))))
-      (:uint64 (values 0 (1- (ash 1 64))))
-      (:int64 (values (- (ash 1 63)) (1- (ash 1 63))))
-      (t (values nil nil)))))
+      (:uint8 (values 0 (1- (ash 1 8)) 8))
+      (:int8 (values (- (ash 1 7)) (1- (ash 1 7)) 8))
+      (:uint16 (values 0 (1- (ash 1 16)) 16))
+      (:int16 (values (- (ash 1 15)) (1- (ash 1 15)) 16))
+      (:uint32 (values 0 (1- (ash 1 32)) 32))
+      (:int32 (values (- (ash 1 31)) (1- (ash 1 31)) 32))
+      (:uint64 (values 0 (1- (ash 1 64)) 64))
+      (:int64 (values (- (ash 1 63)) (1- (ash 1 63)) 64))
+      (t (values nil nil nil)))))
 
 (def (function i) values-c-type? (type)
   (and (consp type)
        (eq (car type) :values)))
 
-(def layered-function can-promote-type? (src dest)
+(def layered-function can-promote-type? (src dest &key silent-signed?)
   (:documentation "Checks if a cast from src to dest is possible.")
-  (:method (src dest)
+  (:method (src dest &key silent-signed?)
     (if (equal src dest)
         t
-        (bind (((:values s-min s-max) (c-int-range src))
-               ((:values d-min d-max) (c-int-range dest)))
+        (bind (((:values s-min s-max s-bits) (c-int-range src))
+               ((:values d-min d-max d-bits) (c-int-range dest)))
           (cond ((and s-min d-min)
-                 (if (and (<= d-min s-min) (>= d-max s-max)) t :warn))
+                 (cond ((and (<= d-min s-min) (>= d-max s-max)) t)
+                       ((and silent-signed?
+                             (or (zerop d-min) (zerop s-min))
+                             (= s-bits d-bits))
+                        t)
+                       (t :warn)))
                 ;; Integer vs floating-point
                 (s-min
                  (case dest
@@ -178,7 +183,9 @@
                  :warn)
                 ;; Recurse into (values) types
                 ((and (values-c-type? src) (values-c-type? dest))
-                 (let ((match (mapcar #'can-promote-type? (rest src) (rest dest))))
+                 (let ((match (mapcar (rcurry #'can-promote-type?
+                                              :silent-signed? silent-signed?)
+                                      (rest src) (rest dest))))
                    (cond ((< (length src) (length dest))
                           nil)
                          ((some #'null match)
@@ -207,24 +214,27 @@
              (item-type-of it))
          (form-c-type-of defn))))
 
-(def function verify-cast (src-type-or-form dest-type form &key prefix (warn? t) error-on-warn? allow)
+(def function verify-cast (src-type-or-form dest-type form &key
+                                            prefix (warn? t) error-on-warn?
+                                            allow (silent-signed? t))
   (let* ((stype (atypecase src-type-or-form
                   (constant-form (propagate-c-types it :upper-type dest-type))
                   (walked-form (form-c-type-of it))
                   (t it)))
          (status (or (member stype allow :test #'equal)
-                     (can-promote-type? stype dest-type))))
+                     (can-promote-type? stype dest-type
+                                        :silent-signed? silent-signed?))))
     (flet ((report (func msg)
              (funcall func form msg
-                      stype dest-type (or prefix "")
+                      stype dest-type prefix
                       (if (and (not (eq src-type-or-form form))
                                (typep src-type-or-form 'walked-form))
                           (unwalk-form src-type-or-form)))))
       (cond ((or (null status)
                  (and (eq status :warn) error-on-warn?))
-             (report #'gpu-code-error "Cannot cast ~S to ~S in ~A~@[~S~]"))
+             (report #'gpu-code-error "Cannot cast ~S to ~S in~@[ ~A~]~@[ ~S~]"))
             ((and warn? (eq status :warn))
-             (report #'warn-gpu-style "Implicit cast of ~S to ~S in ~A~@[~S~]"))))
+             (report #'warn-gpu-style "Implicit cast of ~S to ~S in~@[ ~A~]~@[ ~S~]"))))
     dest-type))
 
 (def function int-value-matches-type? (type value)
@@ -266,10 +276,10 @@
                  :initial-value 0)))
     (elt type-table index)))
 
-(def function ensure-common-type (arg-types form &key prefix types)
+(def function ensure-common-type (arg-types form &key prefix types (silent-signed? t))
   (aprog1 (find-common-type arg-types types)
     (dolist (arg arg-types)
-      (verify-cast arg it form :prefix prefix))))
+      (verify-cast arg it form :prefix prefix :silent-signed? silent-signed?))))
 
 (def function splice-constant-arg (form value)
   (with-form-object (const 'constant-form form :value value)
@@ -402,7 +412,8 @@
       (when (eq (ensure-car target-type) :pointer)
         (gpu-code-error form "Assignment of arrays is not supported."))
       (verify-cast val-type target-type (variable-of form)
-                   :prefix "assignment to ")
+                   :prefix "assignment to"
+                   :silent-signed? nil)
       (if (eq upper-type :void) :void target-type)))
 
   (:method ((form multiple-value-setq-form) &key upper-type)
@@ -419,7 +430,9 @@
                 (gpu-code-error form "Too few values: ~S in multiple-value-setq." value-type))
               (when (eq (ensure-car val-type) :pointer)
                 (gpu-code-error form "Assignment of arrays is not supported."))
-              (verify-cast val-type var-type var :prefix "assignment to ")))
+              (verify-cast val-type var-type var
+                           :prefix "assignment to"
+                           :silent-signed? nil)))
       (if (eq upper-type :void) :void (first type-list))))
 
   ;; Value group
@@ -456,7 +469,8 @@
          (let* ((upper (getf flags :type))
                 (rtype (propagate-c-types item :upper-type upper)))
            (when upper
-             (verify-cast rtype upper form :prefix "inline argument "))))))
+             (verify-cast rtype upper form :prefix "inline argument"
+                          :silent-signed? nil))))))
     (form-c-type-of form))
 
   ;; Blocks
@@ -517,7 +531,7 @@
 
   (:method ((form if-form) &key upper-type)
     (verify-cast (propagate-c-types (condition-of form) :upper-type :boolean)
-                 :boolean form :prefix "condition of ")
+                 :boolean form :prefix "condition of")
     (let ((rt-t (propagate-c-types (then-of form) :upper-type upper-type))
           (rt-e (propagate-c-types (else-of form) :upper-type upper-type)))
       (verify-cast rt-e rt-t form :prefix "else branch of")
@@ -561,7 +575,8 @@
                    init-form nil))
             (t
              (verify-cast init-type decl-type form
-                          :prefix "variable initialization ")))
+                          :prefix "variable initialization"
+                          :silent-signed? nil)))
       (cond ((shared-identity-of form)
              (when (or (initial-value-of form) values-init-type)
                (gpu-code-error form "Shared variables cannot have initialization forms."))

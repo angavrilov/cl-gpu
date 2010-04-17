@@ -132,10 +132,10 @@
   (let* ((arr/type (form-c-type-of arr))
          (item-type (funcall item-type-fun arr/type)))
     (loop for idx in indexes
-       do (verify-cast idx :uint32 form :prefix "index "
+       do (verify-cast idx :uint32 form :prefix "index"
                        :allow '(:int32) :error-on-warn? t))
     (when v-p
-      (verify-cast value item-type form))
+      (verify-cast value item-type form :silent-signed? nil))
     item-type))
 
 (def function emit-aref-expr (stream prefix base-fun gpu-var rank indexes)
@@ -241,10 +241,10 @@
   (declare (ignore access-prefix-fun access-range-fun))
   (let* ((arr/type (form-c-type-of arr))
          (item-type (funcall item-type-fun arr/type)))
-    (verify-cast index :uint32 form :prefix "index "
+    (verify-cast index :uint32 form :prefix "index"
                  :allow '(:int32) :error-on-warn? t)
     (when v-p
-      (verify-cast (form-c-type-of value) item-type form))
+      (verify-cast (form-c-type-of value) item-type form :silent-signed? nil))
     item-type))
 
 (def function emit-raw-aref-core (form var index stream &key value
@@ -419,9 +419,10 @@
 
 ;;; Arithmetics
 
-(def function ensure-arithmetic-result (args-or-types form &key prefix)
+(def function ensure-arithmetic-result (args-or-types form &key prefix (silent-signed? t))
   (ensure-common-type args-or-types form :prefix prefix
-                      :types '(:int32 :uint32 :int64 :uint64 :float :double)))
+                      :types '(:int32 :uint32 :int64 :uint64 :float :double)
+                      :silent-signed? silent-signed?))
 
 (def definer delimited-builtin (name op &key zero single-pfix
                                       (typechecker 'ensure-arithmetic-result))
@@ -519,8 +520,8 @@
      (def type-computer ,name (arg1 arg2)
        ,(if any-type?
             `(or (equal arg1/type arg2/type)
-                 (ensure-arithmetic-result -arguments- -form-))
-            `(ensure-arithmetic-result -arguments- -form-))
+                 (ensure-arithmetic-result -arguments- -form- :silent-signed? nil))
+            `(ensure-arithmetic-result -arguments- -form- :silent-signed? nil))
        :boolean)
      (def c-code-emitter ,name (arg1 arg2)
        (code "(" arg1 ,operator arg2 ")"))))
