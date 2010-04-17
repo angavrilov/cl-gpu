@@ -32,6 +32,20 @@ function fetch_wget() {
 	fi
 }
 
+function fetch_git() {
+	REPO=$1
+	DIR=`basename $REPO .git`
+	if [ -d "$DIR" ]; then
+		pushd $DIR
+		git pull
+		popd
+	else
+		git clone "$REPO"
+	fi
+	
+	ln -sf $DIR/*.asd .
+}
+
 wget -N http://common-lisp.net/project/asdf/asdf.lisp
 
 # Better REPL interface for ecl
@@ -39,7 +53,7 @@ fetch_wget ecl-readline http://www.common-lisp.net/project/ecl-readline/releases
 
 # Misc
 fetch_wget anaphora http://common-lisp.net/project/anaphora/files/anaphora-latest.tar.gz
-fetch_darcs http://common-lisp.net/project/alexandria/darcs/alexandria
+fetch_git git://common-lisp.net/projects/alexandria/alexandria.git
 fetch_darcs http://common-lisp.net/project/iterate/darcs/iterate
 fetch_darcs http://common-lisp.net/project/metabang-bind
 #fetch_darcs http://common-lisp.net/project/trivial-shell
