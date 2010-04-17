@@ -756,6 +756,8 @@
                 (recurse arg))
                ,@code
                (t
+                (when minv
+                  (warn-gpu-style -form- "Using a floating-point implementation for integer rounding."))
                 (emit "(~A)" (c-type-string (form-c-type-of -form-)))
                 (emit-call-c-code ',fallback -form- -stream-)))))))
 
