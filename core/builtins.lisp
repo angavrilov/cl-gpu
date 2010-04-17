@@ -737,20 +737,24 @@
          ((:int32 :uint32 :int64 :uint64) upper-type)
          (t :int32))))))
 
+(def macro with-divisor-vars ((arg divisor atype) &body code)
+  `(bind ((div-value
+           (constant-number-value ,divisor))
+          ((:values minv maxv)
+           (c-int-range (if (and (integerp div-value) (> div-value 0))
+                            (form-c-type-of ,arg)
+                            ,atype)))
+          ((:values power-2 mask-2)
+           (power-of-two div-value)))
+     (declare (ignorable maxv power-2 mask-2))
+     ,@code))
+
 (def definer int-round-builtin (name fallback &body code)
   `(progn
      (def type-computer ,name (arg &optional divisor)
        (int-round-builtin-type -form- -arguments- -upper-type-))
      (def c-code-emitter ,name (arg &optional divisor)
-       (bind ((div-value
-               (constant-number-value divisor))
-              ((:values minv maxv)
-               (c-int-range (if (and (integerp div-value) (> div-value 0))
-                                (form-c-type-of arg)
-                                (combined-arg-type-of -form-))))
-              ((:values power-2 mask-2)
-               (power-of-two div-value)))
-         (declare (ignorable maxv power-2 mask-2))
+       (with-divisor-vars (arg divisor (combined-arg-type-of -form-))
          (cond ((and minv (or (null divisor)
                               (eql div-value 1)))
                 (recurse arg))
@@ -785,6 +789,22 @@
   ((and (eql minv 0) div-value (> div-value 0))
    (code "((" arg "+" (floor div-value 2) ")/" divisor ")")))
 
+(def arithmetic-builtin rem (arg divisor)
+  (with-divisor-vars (arg divisor (form-c-type-of -form-))
+    (cond ((and minv (eql div-value 1))
+           (code "0"))
+          ((and (eql minv 0) power-2)
+           (code "(" arg "&" mask-2 ")"))
+          ((eql minv 0)
+           (code "(" arg "%" divisor ")"))
+          (t
+           (acase (form-c-type-of -form-)
+             ((:float :double)
+              (code "fmod" (float-name-tag it) "(" arg "," divisor ")"))
+             (t
+              (warn-gpu-style -form- "Using a floating-point implementation for integer remainder.")
+              (emit "(~A)" (c-type-string it))
+              (code "fmodf(" arg "," divisor ")")))))))
 
 ;;; MIN & MAX
 
