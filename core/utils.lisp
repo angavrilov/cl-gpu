@@ -130,6 +130,21 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
   `(let ((*excluded-save-slots* (append ',slots *excluded-save-slots*)))
      ,@code))
 
+(def definer custom-slot-load-forms (class &rest clauses)
+  (let ((clist
+         (mapcar (lambda (clause)
+                   `(when (slot-boundp -self- ',(first clause))
+                      `(setf (slot-value ,-self- ',',(first clause))
+                             ,(progn ,@(rest clause)))))
+                 clauses)))
+    `(def method make-load-form ((-self- ,class) &optional -env-)
+       (declare (ignorable -env-))
+       (bind (((:values make init)
+               (with-exclude-save-slots (,@(mapcar #'first clauses))
+                 (call-next-method))))
+         (values make
+                 `(progn ,init ,,@clist))))))
+
 ;;; Temporary files
 
 (def function open-temp-file (base-name &key

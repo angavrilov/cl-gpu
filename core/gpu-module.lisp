@@ -138,17 +138,9 @@
 
 (def macro symbol-gpu-function (s) `(get ,s 'gpu-function))
 
-(def method make-load-form ((object common-gpu-function) &optional env)
-  (declare (ignore env))
-  (multiple-value-bind (make init)
-      (with-exclude-save-slots (usages test-modules)
-        (call-next-method))
-    (values make
-            `(progn ,init
-                    (setf (slot-value ,object 'usages)
-                          (make-weak-set)
-                          (slot-value ,object 'test-modules)
-                          nil)))))
+(def custom-slot-load-forms common-gpu-function
+  (usages '(make-weak-set))
+  (test-modules nil))
 
 (def function register-common-gpu-function (obj)
   (let* ((name (name-of obj))
@@ -179,18 +171,11 @@
   (:default-initargs :return-type :void)
   (:documentation "A kernel callable from the host"))
 
-(def method make-load-form ((object gpu-kernel) &optional env)
-  (declare (ignore env))
-  (multiple-value-bind (make init)
-      (with-exclude-save-slots (invoker-fun)
-        (call-next-method))
-    ;; Functions are not externalizable, so expand it as an init form.
-    (values make
-            (if (invoker-form-of object)
-                `(progn ,init
-                        (setf (slot-value ,object 'invoker-fun)
-                              (function ,(invoker-form-of object))))
-                init))))
+(def custom-slot-load-forms gpu-kernel
+  ;; Functions are not externalizable, so expand it as an init form.
+  (invoker-fun
+   (awhen (invoker-form-of -self-)
+     `(function ,it))))
 
 (def class* gpu-module (save-slots-mixin)
   ((name            :documentation "Lisp name of the module")
