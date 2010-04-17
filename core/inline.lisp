@@ -17,7 +17,7 @@
             (remove-form-by-name decls (name-of func) :type 'function-declaration-form))
           funcs :initial-value decls))
 
-(def function match-call-arguments (arg-mixin arg-vals)
+(def function match-call-arguments (arg-mixin arg-vals &key form)
   "Create a mapping of function arguments to their values."
   (bind (((:values rq-args opt-args key-args aux-args)
           (loop for arg in (bindings-of arg-mixin)
@@ -35,7 +35,10 @@
          (rq-cnt (length rq-args))
          (opt-cnt (length opt-args))
          (nkey-cnt (min val-cnt (+ rq-cnt opt-cnt)))
-         (rq-vals (subseq arg-vals 0 rq-cnt))
+         (rq-vals (if (< val-cnt rq-cnt)
+                      (gpu-code-error form "Too few arguments in call, required:~{ ~A~}"
+                                      (mapcar #'name-of rq-args))
+                      (subseq arg-vals 0 rq-cnt)))
          (opt-vals (subseq arg-vals rq-cnt nkey-cnt))
          (rest-vals (subseq arg-vals nkey-cnt)))
     (append (loop for arg in rq-args and val in rq-vals
@@ -117,7 +120,7 @@
   (check-non-recursive func form)
   (bind ((new-func (if no-copy? func
                        (deep-copy-ast func :parent (parent-of form))))
-         (arg-map (match-call-arguments new-func args)))
+         (arg-map (match-call-arguments new-func args :form form)))
     (change-class new-func (if (typep new-func 'block-lambda-function-form)
                                'block-let-form 'let*-form))
     (setf (bindings-of new-func) (join-call-arguments arg-map))
