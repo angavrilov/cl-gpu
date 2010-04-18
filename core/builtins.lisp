@@ -379,8 +379,10 @@
   (unless (and (consp tuple/type)
                (eq (first tuple/type) :tuple))
     (gpu-code-error -form- "The argument must be a tuple expression."))
-  (let ((size (min (second tuple/type)
-                   (length (unwrap-values-type -upper-type-))))
+  (let ((size (if -upper-type-
+                  (min (second tuple/type)
+                       (length (unwrap-values-type -upper-type-)))
+                  (second tuple/type)))
         (base (third tuple/type)))
     (wrap-values-type (loop for i from 0 below size collect base))))
 
