@@ -46,7 +46,7 @@ function fetch_git() {
 	ln -sf $DIR/*.asd .
 }
 
-wget -N http://common-lisp.net/project/asdf/asdf.lisp
+#wget -N http://common-lisp.net/project/asdf/asdf.lisp
 
 # Better REPL interface for ecl
 fetch_wget ecl-readline http://www.common-lisp.net/project/ecl-readline/releases/ecl-readline-0.4.1.tar.gz
