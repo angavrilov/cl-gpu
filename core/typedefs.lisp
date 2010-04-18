@@ -24,20 +24,6 @@
   (check-type size (or null unsigned-byte))
   `(simple-array ,item (,size)))
 
-(def macro gethash-with-init (key table init-expr)
-  "Looks up the key in the table. When not found, lazily initializes with init-expr."
-  (with-unique-names (item found)
-    (once-only (key table)
-      `(multiple-value-bind (,item ,found) (gethash ,key ,table)
-         (if ,found ,item
-             (setf (gethash ,key ,table) ,init-expr))))))
-
-(def macro with-memoize ((key &rest flags) &body code)
-  "Memoizes the result of the code block using key; flags are passed to make-hash-table."
-  `(gethash-with-init ,key
-                      (load-time-value (make-hash-table ,@flags))
-                      (progn ,@code)))
-
 (def function canonify-foreign-type (type)
   "Computes a canonic form of a C type."
   (with-memoize (type :test #'eq)

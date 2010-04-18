@@ -22,9 +22,10 @@
   :components ((:module "core"
                 :components ((:file "package")
                              (:file "conditions" :depends-on ("package"))
-                             (:file "typedefs" :depends-on ("package" "conditions"))
-                             (:file "utils" :depends-on ("typedefs"))
-                             (:file "buffers" :depends-on ("typedefs" "utils"))
+                             (:file "utils" :depends-on ("conditions"))
+                             (:file "typedefs" :depends-on ("utils"))
+                             (:file "utils-array" :depends-on ("typedefs"))
+                             (:file "buffers" :depends-on ("typedefs" "utils-array"))
                              (:file "foreign-buf" :depends-on ("buffers"))
                              (:file "gpu-module" :depends-on ("buffers"))
                              (:file "forms" :depends-on ("gpu-module"))
