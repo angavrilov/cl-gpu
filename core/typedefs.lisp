@@ -86,3 +86,176 @@
     (let ((cvent (lisp-to-foreign-type type)))
       (if (subtypep (foreign-to-lisp-type cvent) type) cvent nil))))
 
+;;; Classes that describe types as used by the library
+
+(def class gpu-type ()
+  ()
+  (:documentation "A GPU value type"))
+
+(def generic lisp-type-of (type)
+  (:documentation "Returns the lisp typespec based on the gpu type"))
+
+(def class gpu-concrete-type (gpu-type interned-object)
+  ()
+  (:metaclass interned-class)
+  (:documentation "A specific GPU value type."))
+
+(def class gpu-number-type (gpu-concrete-type)
+  ((min-value :initform nil :initarg :min-value :reader min-value-of)
+   (max-value :initform nil :initarg :max-value :reader max-value-of))
+  (:metaclass interned-class)
+  (:documentation "A numeric GPU value type."))
+
+(def function lisp-real-type-name (type tag)
+  (let ((min (min-value-of type))
+        (max (max-value-of type)))
+    (if (or min max)
+        (list tag (or min '*) (or max '*))
+        tag)))
+
+(def method lisp-type-of ((type gpu-number-type))
+  (lisp-real-type-name type 'real))
+
+(def class gpu-integer-type (gpu-number-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "An integer GPU value type."))
+
+(def method lisp-type-of ((type gpu-integer-type))
+  (lisp-real-type-name type 'integer))
+
+(def class gpu-float-type (gpu-number-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "An floating-point GPU value type."))
+
+(def method lisp-type-of ((type gpu-float-type))
+  (lisp-real-type-name type 'float))
+
+;; Native types
+
+(def class gpu-native-type ()
+  ()
+  (:documentation "An abstract class denoting types that map to foreign ones."))
+
+(def generic make-foreign-gpu-type (id &key)
+  (:documentation "Returns a gpu-type object for the specified CFFI type."))
+
+(def layered-function foreign-type-of (type)
+  (:documentation "Returns the CFFI descriptor for a native type"))
+
+(def layered-function native-type-c-string (type)
+  (:documentation "Returns the C string for a native type"))
+
+(def layered-function native-type-byte-size (type)
+  (:documentation "Returns the byte size of a native type"))
+
+(def layered-function native-type-alignment (type)
+  (:documentation "Returns the byte alignment requirements of a native type"))
+
+(def macro def-native-type-info (class fid cstring size alignment &key min-limit max-limit not-number?)
+  `(progn
+     ,(if not-number?
+          `(def method make-foreign-gpu-type ((id (eql ,fid)) &key)
+             (make-instance ',class))
+          `(def method make-foreign-gpu-type ((id (eql ,fid)) &key min-value max-value)
+             (make-instance ',class
+                            :min-value ,(if min-limit
+                                            `(if (and min-value (> min-value ,min-limit)) min-value)
+                                            'min-value)
+                            :max-value ,(if max-limit
+                                            `(if (and max-value (< max-value ,max-limit)) max-value)
+                                            'max-value))))
+     (let ((foo)) ; Make defconstant non-toplevel to avoid
+                  ; compile-time evaluation
+       (declare (ignore foo))
+       (defconstant ,(symbolicate "+" class "+") (make-foreign-gpu-type ,fid)))
+     (def layered-method foreign-type-of ((type ,class))
+       ,fid)
+     ,(when cstring
+            `(def layered-method native-type-c-string ((type ,class))
+               ,cstring))
+     (def layered-method native-type-byte-size ((type ,class))
+       ,size)
+     (def layered-method native-type-alignment ((type ,class))
+       ,alignment)))
+
+;; Floating-point native types
+
+(def class gpu-single-float-type (gpu-float-type gpu-native-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "A single-precision floating-point GPU value type."))
+
+(def-native-type-info gpu-single-float-type :float "float" 4 4)
+
+(def method lisp-type-of ((type gpu-single-float-type))
+  (lisp-real-type-name type 'single-float))
+
+(def class gpu-double-float-type (gpu-float-type gpu-native-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "A double-precision floating-point GPU value type."))
+
+(def-native-type-info gpu-double-float-type :double "double" 8 8)
+
+(def method lisp-type-of ((type gpu-double-float-type))
+  (lisp-real-type-name type 'double-float))
+
+;; Integer native types
+
+(macrolet ((mkints (&rest items)
+             (loop for (foreign-id c-name bytes signed?) in items
+                for class-name = (symbolicate '#:gpu- foreign-id '#:-type)
+                for magnitude = (ash 1 (- (* 8 bytes) (if signed? 1 0)))
+                for min-value = (if signed? (- magnitude) 0)
+                for max-value = (1- magnitude)
+                append `((def class ,class-name (gpu-integer-type gpu-native-type)
+                           ()
+                           (:metaclass interned-class)
+                           (:documentation "A native integer GPU value type."))
+                         (def-native-type-info ,class-name ,foreign-id ,c-name ,bytes ,bytes
+                                               :min-limit ,min-value :max-limit ,max-value)
+                         (def method min-value-of ((obj ,class-name))
+                           (max (or (call-next-method) ,min-value) ,min-value))
+                         (def method max-value-of ((obj ,class-name))
+                           (min (or (call-next-method) ,max-value) ,max-value)))
+                into classes
+                collect `((subtypep type '(integer ,min-value ,max-value))
+                          (make-instance ',class-name))
+                into from-lisp
+                collect `((and (>= min-value ,min-value) (<= max-value ,max-value))
+                          (make-instance ',class-name
+                                         :min-value (if (= min-value ,min-value) nil min-value)
+                                         :max-value (if (= max-value ,max-value) nil max-value)))
+                into from-range
+                finally
+                  (return `(progn
+                             ,@classes
+                             (def function make-gpu-integer-from-lisp-type (type)
+                               (cond ,@from-lisp
+                                     (t (make-instance 'gpu-integer-type))))
+                             (def function make-gpu-integer-from-range (min-value max-value)
+                               (cond ,@from-range
+                                     (t (make-instance 'gpu-integer-type
+                                                       :min-value min-value :max-value max-value)))))))))
+  (mkints (:int8 "signed char" 1 t)
+          (:uint8 "unsigned char" 1 nil)
+          (:int16 "short" 2 t)
+          (:uint16 "unsigned short" 2 nil)
+          (:int32 "int" 4 t)
+          (:uint32 "unsigned int" 4 nil)
+          (:int64 nil 8 t)
+          (:uint64 nil 8 nil)))
+
+;; Boolean native type
+
+(def class gpu-boolean-type (gpu-concrete-type gpu-native-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "A boolean GPU value type."))
+
+(def-native-type-info gpu-boolean-type :boolean "int" 4 4 :not-number? t)
+
+(def method lisp-type-of ((type gpu-boolean-type))
+  'boolean)
