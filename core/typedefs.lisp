@@ -158,14 +158,10 @@
      ,(if not-number?
           `(def method make-foreign-gpu-type ((id (eql ,fid)) &key)
              (make-instance ',class))
-          `(def method make-foreign-gpu-type ((id (eql ,fid)) &key min-value max-value)
+          `(def method make-foreign-gpu-type ((id (eql ,fid)) &key (min-value ,min-limit) (max-value ,max-limit))
              (make-instance ',class
-                            :min-value ,(if min-limit
-                                            `(if (and min-value (> min-value ,min-limit)) min-value)
-                                            'min-value)
-                            :max-value ,(if max-limit
-                                            `(if (and max-value (< max-value ,max-limit)) max-value)
-                                            'max-value))))
+                            :min-value ,(if min-limit `(max min-value ,min-limit) 'min-value)
+                            :max-value ,(if max-limit `(min max-value ,max-limit) 'max-value))))
      (let ((foo)) ; Make defconstant non-toplevel to avoid
                   ; compile-time evaluation
        (declare (ignore foo))
@@ -213,21 +209,18 @@
                 append `((def class ,class-name (gpu-integer-type gpu-native-type)
                            ()
                            (:metaclass interned-class)
+                           (:default-initargs :min-value ,min-value :max-value ,max-value)
                            (:documentation "A native integer GPU value type."))
+                         (def method initialize-instance :before ((self ,class-name) &key min-value max-value)
+                           (assert (and (>= min-value ,min-value) (<= max-value ,max-value))))
                          (def-native-type-info ,class-name ,foreign-id ,c-name ,bytes ,bytes
-                                               :min-limit ,min-value :max-limit ,max-value)
-                         (def method min-value-of ((obj ,class-name))
-                           (max (or (call-next-method) ,min-value) ,min-value))
-                         (def method max-value-of ((obj ,class-name))
-                           (min (or (call-next-method) ,max-value) ,max-value)))
+                                               :min-limit ,min-value :max-limit ,max-value))
                 into classes
                 collect `((subtypep type '(integer ,min-value ,max-value))
                           (make-instance ',class-name))
                 into from-lisp
                 collect `((and (>= min-value ,min-value) (<= max-value ,max-value))
-                          (make-instance ',class-name
-                                         :min-value (if (= min-value ,min-value) nil min-value)
-                                         :max-value (if (= max-value ,max-value) nil max-value)))
+                          (make-instance ',class-name :min-value min-value :max-value max-value))
                 into from-range
                 finally
                   (return `(progn
