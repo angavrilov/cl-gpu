@@ -10,24 +10,6 @@
 
 (in-package :cl-gpu)
 
-(def generic expand-gpu-type (name args)
-  (:documentation "Expands type aliases defined through gpu-type.")
-  (:method ((name t) args)
-    (declare (ignore name args))
-    (values)))
-
-(def (definer e :available-flags "e") gpu-type (name args &body code)
-  ;; Does a deftype that is available to GPU code
-  `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (defmethod expand-gpu-type ((name (eql ',name)) args)
-       (values (block ,name
-                 (destructuring-bind ,args args
-                   ,@code))
-               t))
-     ,@(if (null (getf -options- :gpu-only))
-           `((def (type :export ,(getf -options- :export)) ,name ,args
-               ,@code)))))
-
 (def function parse-atomic-type (type-spec &key form)
   (or (lisp-to-foreign-type type-spec)
       (gpu-code-error form "Unknown atomic type: ~S" type-spec)))

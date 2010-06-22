@@ -12,6 +12,11 @@
 
 ;;; Misc
 
+(declaim (inline ensure-cdr))
+
+(def function ensure-cdr (item)
+  (if (consp item) (cdr item)))
+
 (def macro gethash-with-init (key table init-expr)
   "Looks up the key in the table. When not found, lazily initializes with init-expr."
   (with-unique-names (item found)

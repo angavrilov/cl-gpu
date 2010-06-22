@@ -4,25 +4,50 @@
 ;;;
 ;;; See LICENCE for details.
 ;;;
-;;; This file defines a few convenient lisp types
-;;; and implements foreign<->lisp type conversion.
+;;; This file defines a few convenient lisp types,
+;;; a set of classes that describe the type system
+;;; of the code converter, and various conversions.
 ;;;
 
 (in-package :cl-gpu)
 
-(deftype uint8 () '(unsigned-byte 8))
-(deftype uint16 () '(unsigned-byte 16))
-(deftype uint32 () '(unsigned-byte 32))
-(deftype uint64 () '(unsigned-byte 64))
+;;; GPU-specific type expanders
 
-(deftype int8 () '(signed-byte 8))
-(deftype int16 () '(signed-byte 16))
-(deftype int32 () '(signed-byte 32))
-(deftype int64 () '(signed-byte 64))
+(def generic expand-gpu-type (name args)
+  (:documentation "Expands type aliases defined through gpu-type.")
+  (:method ((name t) args)
+    (declare (ignore name args))
+    (values)))
+
+(def (definer e :available-flags "e") gpu-type (name args &body code)
+  ;; Does a deftype that is available to GPU code
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (defmethod expand-gpu-type ((name (eql ',name)) args)
+       (values (block ,name
+                 (destructuring-bind ,args args
+                   ,@code))
+               t))
+     ,@(if (null (getf -options- :gpu-only))
+           `((def (type :export ,(getf -options- :export)) ,name ,args
+               ,@code)))))
+
+;;; Some convenient types
+
+(def gpu-type uint8 () '(unsigned-byte 8))
+(def gpu-type uint16 () '(unsigned-byte 16))
+(def gpu-type uint32 () '(unsigned-byte 32))
+(def gpu-type uint64 () '(unsigned-byte 64))
+
+(def gpu-type int8 () '(signed-byte 8))
+(def gpu-type int16 () '(signed-byte 16))
+(def gpu-type int32 () '(signed-byte 32))
+(def gpu-type int64 () '(signed-byte 64))
 
 (def (type e) tuple (item &optional size)
   (check-type size (or null unsigned-byte))
   `(simple-array ,item (,size)))
+
+;;; Misc
 
 (def function canonify-foreign-type (type)
   "Computes a canonic form of a C type."
@@ -38,55 +63,12 @@
                (foreign-type-size type)))
       (t type))))
 
-(def function canonify-lisp-type (type)
-  "Computes a canonic form of a lisp type."
-  (with-memoize (type :test #'equal)
-    (or (cond ((eq type 'fixnum) 'int32) ; a hack to unify 32 & 64-bit
-              ((subtypep type 'unsigned-byte)
-               (cond ((subtypep type '(unsigned-byte 8)) 'uint8)
-                     ((subtypep type '(unsigned-byte 16)) 'uint16)
-                     ((subtypep type '(unsigned-byte 32)) 'uint32)
-                     ((subtypep type '(unsigned-byte 64)) 'uint64)))
-              ((subtypep type 'signed-byte)
-               (cond ((subtypep type '(signed-byte 8)) 'int8)
-                     ((subtypep type '(signed-byte 16)) 'int16)
-                     ((subtypep type '(signed-byte 32)) 'int32)
-                     ((subtypep type '(signed-byte 64)) 'int64)))
-              ((subtypep type 'single-float) 'single-float)
-              ((subtypep type 'double-float) 'double-float)
-              ((subtypep type 'boolean) 'boolean))
-        type)))
-
-(def (function e) foreign-to-lisp-type (type)
-  "Converts a foreign type to a lisp supertype."
-  (case (canonify-foreign-type type)
-    (:int8 'int8) (:int16 'int16) (:int32 'int32) (:int64 'int64)
-    (:uint8 'uint8) (:uint16 'uint16) (:uint32 'uint32) (:uint64 'uint64)
-    (:float 'single-float) (:double 'double-float) (:boolean 'boolean)
-    (:void nil)))
-
-(def (function e) lisp-to-foreign-type (type)
-  "Converts a lisp type to a foreign supertype."
-  (case (canonify-lisp-type type)
-    (int8 :int8) (int16 :int16) (int32 :int32) (int64 :int64)
-    (uint8 :uint8) (uint16 :uint16) (uint32 :uint32) (uint64 :uint64)
-    (single-float :float) (double-float :double) (boolean :boolean)
-    ((nil) :void)))
-
-(def (function e) foreign-to-lisp-elt-type (type)
-  "Converts a foreign type to an equivalent lisp array elt type. NIL if none."
-  (with-memoize (type :test #'eq)
-    (let* ((cvent (foreign-to-lisp-type type))
-           (elttype (upgraded-array-element-type cvent)))
-      (if (subtypep elttype cvent) elttype nil))))
-
-(def (function e) lisp-to-foreign-elt-type (type)
-  "Converts a lisp type to an equivalent foreign type. NIL if none."
-  (with-memoize (type :test #'equal)
-    (let ((cvent (lisp-to-foreign-type type)))
-      (if (subtypep (foreign-to-lisp-type cvent) type) cvent nil))))
-
 ;;; Classes that describe types as used by the library
+;;;
+;;; NOTE: Concrete type objects are interned, which allows
+;;;       meaningfull comparison with EQ, but requires that
+;;;       their field values be constant.
+;;;
 
 (def class gpu-type ()
   ()
@@ -229,7 +211,10 @@
                                (cond ,@from-lisp
                                      (t (make-instance 'gpu-integer-type))))
                              (def function make-gpu-integer-from-range (min-value max-value)
-                               (cond ,@from-range
+                               (cond ((or (null min-value) (null max-value))
+                                      (make-instance 'gpu-integer-type
+                                                     :min-value min-value :max-value max-value))
+                                     ,@from-range
                                      (t (make-instance 'gpu-integer-type
                                                        :min-value min-value :max-value max-value)))))))))
   (mkints (:int8 "signed char" 1 t)
@@ -252,3 +237,102 @@
 
 (def method lisp-type-of ((type gpu-boolean-type))
   'boolean)
+
+;;; Lisp type parsing code
+
+(def generic do-parse-lisp-type (name type-spec &key form)
+  (:documentation "Parses the lisp type specifier")
+  (:method ((name t) type-spec &key form)
+    (declare (ignore name))
+    ;; Fallback code using subtypep provided by the implementation.
+    (cond ((subtypep type-spec 'integer)
+           (make-gpu-integer-from-lisp-type type-spec))
+          ((subtypep type-spec 'float)
+           (cond ((subtypep type-spec 'single-float)
+                  (make-instance 'gpu-single-float-type))
+                 ((subtypep type-spec 'double-float)
+                  (make-instance 'gpu-double-float-type))
+                 (t
+                  (make-instance 'gpu-float-type))))
+          ((subtypep type-spec 'number)
+           (make-instance 'gpu-number-type))
+          ((subtypep type-spec 'boolean)
+           (make-instance 'gpu-boolean-type))
+          (t
+           (gpu-code-error form "Unsupported type spec: ~S" type-spec)))))
+
+(def definer lisp-type-parser (name args &body code)
+  `(defmethod do-parse-lisp-type ((-name- (eql ',name)) -whole- &key ((:form -form-)))
+     (declare (ignorable -name- -form-))
+     (flet ((-recurse- (type)
+              (parse-lisp-type type :form -form-)))
+       (block ,name
+         (destructuring-bind ,args (ensure-cdr -whole-)
+           ,@code)))))
+
+(def function parse-lisp-type (type-spec &key form)
+  (multiple-value-bind (rspec expanded?)
+      (expand-gpu-type (ensure-car type-spec) (ensure-cdr type-spec))
+    (if expanded?
+        (parse-lisp-type rspec :form form)
+        (do-parse-lisp-type (ensure-car type-spec) type-spec :form form))))
+
+(def macro with-no-stars (vars &body code)
+  `(let ,(loop for var in vars collect `(,var (if (eq ,var '*) nil ,var)))
+     ,@code))
+
+;; Parsers:
+
+(def lisp-type-parser fixnum ()
+  (make-instance 'gpu-int32-type))
+
+(def lisp-type-parser integer (&optional min-value max-value)
+  (with-no-stars (min-value max-value)
+    (make-gpu-integer-from-range min-value max-value)))
+
+(def lisp-type-parser unsigned-byte (&optional bits)
+  (with-no-stars (bits)
+    (if bits
+        (make-gpu-integer-from-range 0 (1- (ash 1 bits)))
+        (make-instance 'gpu-integer-type :min-value 0))))
+
+(def lisp-type-parser signed-byte (&optional bits)
+  (with-no-stars (bits)
+    (if bits
+        (make-gpu-integer-from-range (- (ash 1 (1- bits))) (1- (ash 1 (1- bits))))
+        (make-instance 'gpu-integer-type))))
+
+(def lisp-type-parser float (&optional min-value max-value)
+  (with-no-stars (min-value max-value)
+    (make-instance 'gpu-float-type :min-value min-value :max-value max-value)))
+
+(def lisp-type-parser single-float (&optional min-value max-value)
+  (with-no-stars (min-value max-value)
+    (make-instance 'gpu-single-float-type :min-value min-value :max-value max-value)))
+
+(def lisp-type-parser double-float (&optional min-value max-value)
+  (with-no-stars (min-value max-value)
+    (make-instance 'gpu-double-float-type :min-value min-value :max-value max-value)))
+
+;;; Type conversion functions
+
+(def (function e) foreign-to-lisp-type (type)
+  "Converts a foreign type to a lisp supertype."
+  (lisp-type-of (make-foreign-gpu-type (canonify-foreign-type type))))
+
+(def (function e) foreign-to-lisp-elt-type (type)
+  "Converts a foreign type to an equivalent lisp array elt type. NIL if none."
+  (with-memoize (type :test #'eq)
+    (let* ((cvent (foreign-to-lisp-type type))
+           (elttype (upgraded-array-element-type cvent)))
+      (if (subtypep elttype cvent) elttype nil))))
+
+(def (function e) lisp-to-foreign-type (type)
+  "Converts a lisp type to a foreign supertype."
+  (foreign-type-of (parse-lisp-type type)))
+
+(def (function e) lisp-to-foreign-elt-type (type)
+  "Converts a lisp type to an equivalent foreign type. NIL if none."
+  (with-memoize (type :test #'equal)
+    (let ((cvent (lisp-to-foreign-type type)))
+      (if (subtypep (foreign-to-lisp-type cvent) type) cvent nil))))
