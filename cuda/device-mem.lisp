@@ -53,7 +53,7 @@
                    (slot-value mirror 'blk))))))
 
 (def (function e) make-cuda-array (dims &key (element-type 'single-float)
-                                        (foreign-type (lisp-to-foreign-elt-type element-type) ft-p)
+                                        (foreign-type (lisp-to-gpu-type element-type) ft-p)
                                         pitch-elt-size (pitch-level 1)
                                         initial-element (debug *cuda-debug*))
   (unless foreign-type
@@ -62,7 +62,8 @@
          (head-dims (butlast dims pitch-level))
          (tail-dims (last dims pitch-level))
          (size (reduce #'* dims))
-         (elt-size (foreign-type-size foreign-type)))
+         (elt-type (foreign-to-gpu-type foreign-type))
+         (elt-size (native-type-byte-size elt-type)))
     (when (and initial-element
                (not (eql initial-element 0))
                (not (case elt-size ((1 2 4) t))))
@@ -75,7 +76,7 @@
                                       'cuda-debug-mem-array
                                       'cuda-mem-array)
                                   :blk blk :size size
-                                  :elt-type foreign-type :elt-size elt-size
+                                  :elt-type elt-type :elt-size elt-size
                                   :dims (to-uint32-vector dims)
                                   :strides (to-uint32-vector strides))))
       (if initial-element
@@ -88,7 +89,7 @@
   (declare (ignore offset element-type))
   (with-slots (blk log-offset) buffer
     ;; Verify pitch alignment
-    (let* ((elt-size (foreign-type-size foreign-type))
+    (let* ((elt-size (native-type-byte-size foreign-type))
            (new-offset (+ log-offset byte-offset))
            (phys-offset (cuda-linear-adjust-offset blk new-offset))
            (rank (length dimensions))
@@ -134,17 +135,12 @@
 (def method row-major-bref ((buffer cuda-mem-array) index)
   (with-slots (elt-type) buffer
     (with-cuda-array-ref ((blk pos) buffer index :msg "reading the buffer element")
-      (with-foreign-object (tmp elt-type)
-        (%cuda-linear-dh-transfer blk tmp pos elt-size t)
-        (mem-ref tmp elt-type)))))
+      (native-type-ref elt-type (curry #'%cuda-linear-dh-transfer blk) pos))))
 
 (def method (setf row-major-bref) (value (buffer cuda-mem-array) index)
   (with-slots (elt-type) buffer
     (with-cuda-array-ref ((blk pos) buffer index :msg "writing the buffer element")
-      (with-foreign-object (tmp elt-type)
-        (prog1
-            (setf (mem-ref tmp elt-type) value)
-          (%cuda-linear-dh-transfer blk tmp pos elt-size nil))))))
+      (setf (native-type-ref elt-type (curry #'%cuda-linear-dh-transfer blk) pos) value))))
 
 (def method buffer-fill ((buffer cuda-mem-array) value &key start end)
   (with-slots (blk log-offset elt-type elt-size) buffer
@@ -152,7 +148,8 @@
       (let ((count (- end start)))
         (if (eql value 0)     ; Fill with 0 in binary mode, so that it
                               ; works with any type
-            (%cuda-linear-memset blk (* start elt-size) (* count elt-size) :uint8 0 :offset log-offset)
+            (%cuda-linear-memset blk (* start elt-size) (* count elt-size)
+                                 +gpu-uint8-type+ 0 :offset log-offset)
             (%cuda-linear-memset blk start count elt-type value :offset log-offset))))))
 
 (def method %copy-buffer-data ((src array) (dst cuda-mem-array) src-offset dst-offset count)
@@ -202,16 +199,17 @@
   (print-buffer "CUDA Mapped Host Array" obj stream))
 
 (def (function e) make-cuda-host-array (dims &key (element-type 'single-float)
-                                             (foreign-type (lisp-to-foreign-elt-type element-type) ft-p)
+                                             (foreign-type (lisp-to-gpu-type element-type) ft-p)
                                              initial-element flags)
   (unless foreign-type
     (error "Invalid foreign array type: ~S" (if ft-p foreign-type element-type)))
   (let* ((dims (ensure-list dims))
          (size (reduce #'* dims))
-         (elt-size (foreign-type-size foreign-type)))
+         (elt-type (foreign-to-gpu-type foreign-type))
+         (elt-size (native-type-byte-size elt-type)))
     (let* ((blk (cuda-alloc-host (* size elt-size) :flags flags))
            (buffer (make-instance 'cuda-host-array :blk blk :size size
-                                  :elt-type foreign-type :elt-size elt-size
+                                  :elt-type elt-type :elt-size elt-size
                                   :dims (to-uint32-vector dims))))
       (if initial-element
           (buffer-fill buffer initial-element)

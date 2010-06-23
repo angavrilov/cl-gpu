@@ -63,7 +63,7 @@
    (log-offset :type fixnum :initform 0
                :documentation "Offset to the start of the block")
    (size :type fixnum :documentation "Array size in elements")
-   (elt-type :type t :documentation "Foreign element type")
+   (elt-type :type t :documentation "GPU element type")
    (elt-size :type fixnum :documentation "Element size in bytes")
    (dims :type (vector uint32) :documentation "Dimension vector"))
   (:automatic-accessors-p nil))
@@ -72,8 +72,11 @@
 
 (delegate-buffer-refcnt (buffer abstract-foreign-buffer) (slot-value buffer 'blk))
 
-(def method buffer-foreign-type ((buffer abstract-foreign-buffer))
+(def method buffer-gpu-type ((buffer abstract-foreign-buffer))
   (slot-value buffer 'elt-type))
+
+(def method buffer-foreign-type ((buffer abstract-foreign-buffer))
+  (foreign-type-of (slot-value buffer 'elt-type)))
 
 (def method buffer-rank ((buffer abstract-foreign-buffer))
   (length (slot-value buffer 'dims)))
@@ -129,14 +132,15 @@
                                      (byte-offset (if ofs-p (* offset (slot-value buffer 'elt-size)) 0))
                                      (element-type nil elt-type-p)
                                      (foreign-type (if elt-type-p
-                                                       (lisp-to-foreign-elt-type element-type)
+                                                       (lisp-to-gpu-type element-type)
                                                        (slot-value buffer 'elt-type)))
                                      (size nil)
                                      (dimensions (or size (buffer-dimensions buffer))))
   (check-type byte-offset unsigned-byte)
   (with-slots (elt-type elt-size size) buffer
-    (let ((old-byte-size (* elt-size size))
-          (new-elt-size (foreign-type-size foreign-type)))
+    (let* ((old-byte-size (* elt-size size))
+           (new-gpu-type (foreign-to-gpu-type foreign-type))
+           (new-elt-size (native-type-byte-size new-gpu-type)))
       (when (eql dimensions t)
         (setf dimensions (floor (- old-byte-size byte-offset) new-elt-size)))
       (let ((dims (ensure-list dimensions)))
@@ -146,9 +150,9 @@
                (byte-size (* new-size new-elt-size)))
           (when (> (+ byte-offset byte-size) old-byte-size)
             (error "Specified dimensions ~A ~S exceed the original size ~A ~A"
-                   foreign-type dims size elt-type))
+                   new-gpu-type dims size elt-type))
           (apply #'call-next-method buffer
-                 :byte-offset byte-offset :foreign-type foreign-type
+                 :byte-offset byte-offset :foreign-type new-gpu-type
                  :size new-size :dimensions dims
                  (remove-from-plist flags :offset :byte-offset :element-type
                                     :foreign-type :size :dimensions)))))))
@@ -188,16 +192,17 @@
   (print-buffer "Foreign Array" obj stream))
 
 (def (function e) make-foreign-array (dims &key (element-type 'single-float)
-                                           (foreign-type (lisp-to-foreign-elt-type element-type) ft-p)
+                                           (foreign-type (lisp-to-gpu-type element-type) ft-p)
                                            initial-element)
   (unless foreign-type
     (error "Invalid foreign array type: ~S" (if ft-p foreign-type element-type)))
   (let* ((dims (ensure-list dims))
          (size (reduce #'* dims))
-         (elt-size (foreign-type-size foreign-type))
-         (blk (alloc-foreign-block foreign-type size :initial-element initial-element))
+         (elt-type (foreign-to-gpu-type foreign-type))
+         (elt-size (native-type-byte-size elt-type))
+         (blk (alloc-foreign-block (foreign-type-of elt-type) size :initial-element initial-element))
          (buffer (make-instance 'foreign-array :blk blk :size size
-                                :elt-type foreign-type :elt-size elt-size
+                                :elt-type elt-type :elt-size elt-size
                                 :dims (to-uint32-vector dims))))
     (values buffer)))
 
@@ -209,18 +214,18 @@
     ;; The dimensions have been verified and canonified by the around method
     (make-instance (class-of buffer) :blk blk :size size
                    :displaced-to buffer :log-offset (+ log-offset byte-offset)
-                   :elt-type foreign-type :elt-size (foreign-type-size foreign-type)
+                   :elt-type foreign-type :elt-size (native-type-byte-size foreign-type)
                    :dims (to-uint32-vector dimensions))))
 
 (def method row-major-bref ((buffer foreign-array) index)
   (with-slots (blk log-offset elt-type elt-size) buffer
-    (mem-ref (foreign-block-handle blk) elt-type
-             (+ (* index elt-size) log-offset))))
+    (native-type-ref elt-type (foreign-block-handle blk)
+                     (+ (* index elt-size) log-offset))))
 
 (def method (setf row-major-bref) (value (buffer foreign-array) index)
   (with-slots (blk log-offset elt-type elt-size) buffer
-    (setf (mem-ref (foreign-block-handle blk) elt-type
-                   (+ (* index elt-size) log-offset))
+    (setf (native-type-ref elt-type (foreign-block-handle blk)
+                           (+ (* index elt-size) log-offset))
           value)))
 
 (defcfun "memcpy" :pointer
@@ -249,9 +254,11 @@
   (with-foreign-array-ref ((ptr) buffer start)
     (if (eql value 0)
         (memset ptr 0 (* (- end start) elt-size))
-        (loop with elt-type = (slot-value buffer 'elt-type)
+        (loop
+           with elt-type = (slot-value buffer 'elt-type)
+           with elt-size = (slot-value buffer 'elt-size)
            for i from 0 below (- end start)
-           do (setf (mem-aref ptr elt-type i) value)))))
+           do (setf (native-type-ref elt-type ptr (* i elt-size)) value)))))
 
 (def method %copy-buffer-data ((src array) (dst foreign-array) src-offset dst-offset count)
   (with-foreign-array-ref ((d-ptr) dst dst-offset)

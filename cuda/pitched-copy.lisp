@@ -102,13 +102,16 @@
 
 (def function %cuda-linear-memset (blk index count type value &key (offset 0))
   "Fills the linear block region with the same value."
-  (multiple-value-bind (elt-size ivalue)
-      (with-foreign-object (ptmp type)
-        (setf (mem-ref ptmp type) value)
-        (ecase (foreign-type-size type)
-          (1 (values 1 (mem-ref ptmp :uint8)))
-          (2 (values 2 (mem-ref ptmp :uint16)))
-          (4 (values 4 (mem-ref ptmp :uint32)))))
+  (let (elt-size ivalue)
+    (setf (native-type-ref type
+                           (lambda (ptmp offset size dir)
+                             (assert (and (null dir) (= offset 0)))
+                             (setf elt-size size
+                                   ivalue (ecase size
+                                            (1 (mem-ref ptmp :uint8))
+                                            (2 (mem-ref ptmp :uint16))
+                                            (4 (mem-ref ptmp :uint32)))))
+                           0) value)
     (let ((handle (cuda-linear-ensure-handle blk)))
       (declare (type integer handle))
       (flet ((fill-chunk (dev-ofs host-ofs size)

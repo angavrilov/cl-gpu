@@ -109,10 +109,17 @@
   (:method ((buffer t))
     (foreign-to-lisp-elt-type (buffer-foreign-type buffer))))
 
+(def (generic e) buffer-gpu-type (buffer)
+  (:documentation "Returns the gpu-type object for the elements of the buffer.")
+  (:method ((buffer t))
+    (lisp-to-gpu-type (buffer-element-type buffer))))
+
 (def (generic e) buffer-foreign-type (buffer)
   (:documentation "Returns the foreign element type of the buffer.")
   (:method ((buffer array))
-    (lisp-to-foreign-elt-type (array-element-type buffer))))
+    (lisp-to-foreign-elt-type (array-element-type buffer)))
+  (:method ((buffer t))
+    (foreign-type-of (buffer-gpu-type buffer))))
 
 (def (generic e) buffer-rank (buffer)
   (:documentation "Returns the array rank of the buffer.")
@@ -211,7 +218,8 @@
       (format stream "~A &~A ~S ~A" name (or refcnt 0)
               (buffer-dimensions obj)
               (if (eql (bufferp obj) :foreign)
-                  (buffer-foreign-type obj)
+                  (or (buffer-foreign-type obj)
+                      (buffer-gpu-type obj))
                   (buffer-element-type obj)))
       (if refcnt
           (or (ignore-errors
@@ -227,7 +235,7 @@
   (unless
       (if (or (eql (bufferp src) :foreign)
               (eql (bufferp dst) :foreign))
-          (equal (buffer-foreign-type src) (buffer-foreign-type dst))
+          (eq (buffer-gpu-type src) (buffer-gpu-type dst))
           (equal (buffer-element-type src) (buffer-element-type dst)))
     (error "Element type mismatch: ~S and ~S" src dst)))
 

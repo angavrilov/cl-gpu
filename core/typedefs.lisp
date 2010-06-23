@@ -121,21 +121,33 @@
   (:documentation "An abstract class denoting types that map to foreign ones."))
 
 (def generic make-foreign-gpu-type (id &key)
-  (:documentation "Returns a gpu-type object for the specified CFFI type."))
+  (:documentation "Returns a gpu-type object for the specified CFFI type.")
+  (:method ((id gpu-type) &key)
+    id))
 
-(def layered-function foreign-type-of (type)
-  (:documentation "Returns the CFFI descriptor for a native type"))
+(def generic foreign-type-of (type)
+  (:documentation "Returns the CFFI descriptor for a native type")
+  (:method ((type t))
+    nil))
 
 (def layered-function native-type-c-string (type)
   (:documentation "Returns the C string for a native type"))
 
-(def layered-function native-type-byte-size (type)
+(def generic native-type-byte-size (type)
   (:documentation "Returns the byte size of a native type"))
 
 (def layered-function native-type-alignment (type)
   (:documentation "Returns the byte alignment requirements of a native type"))
 
-(def macro def-native-type-info (class fid cstring size alignment &key min-limit max-limit not-number?)
+(def generic native-type-ref (type ptr offset)
+  (:documentation "Reads the native type value from the specified ptr & offset."))
+
+(def generic (setf native-type-ref) (value type ptr offset)
+  (:documentation "Writes the native type value to the specified ptr & offset."))
+
+(def macro def-native-type-info (class fid cstring size alignment &key min-limit max-limit not-number?
+                                       &aux (fp-type #+ecl 'si:foreign-data
+                                                     #+openmcl 'ccl:macptr))
   `(progn
      ,(if not-number?
           `(def method make-foreign-gpu-type ((id (eql ,fid)) &key)
@@ -148,15 +160,28 @@
                   ; compile-time evaluation
        (declare (ignore foo))
        (defconstant ,(symbolicate "+" class "+") (make-foreign-gpu-type ,fid)))
-     (def layered-method foreign-type-of ((type ,class))
+     (def method foreign-type-of ((type ,class))
        ,fid)
      ,(when cstring
             `(def layered-method native-type-c-string ((type ,class))
                ,cstring))
-     (def layered-method native-type-byte-size ((type ,class))
+     (def method native-type-byte-size ((type ,class))
        ,size)
      (def layered-method native-type-alignment ((type ,class))
-       ,alignment)))
+       ,alignment)
+     (def method native-type-ref ((type ,class) (ptr ,fp-type) offset)
+       (mem-ref ptr ,fid offset))
+     (def method native-type-ref ((type ,class) (ptr function) offset)
+       (with-foreign-object (tmp ,fid)
+         (funcall ptr tmp offset ,size t)
+         (mem-ref tmp ,fid)))
+     (def method (setf native-type-ref) (value (type ,class) (ptr ,fp-type) offset)
+       (setf (mem-ref ptr ,fid offset) value))
+     (def method (setf native-type-ref) (value (type ,class) (ptr function) offset)
+       (with-foreign-object (tmp ,fid)
+        (prog1
+            (setf (mem-ref tmp ,fid) value)
+          (funcall ptr tmp offset ,size nil))))))
 
 ;; Floating-point native types
 
@@ -316,9 +341,22 @@
 
 ;;; Type conversion functions
 
+(def function lisp-to-gpu-type (type)
+  "Converts a foreign type to an equivalent gpu-type object. NIL if none."
+  (with-memoize (type :test #'equal)
+    (if (typep type 'gpu-type)
+        type
+        (let* ((cvtype (parse-lisp-type type))
+               (cvltype (lisp-type-of cvtype)))
+          (if (subtypep cvltype type) cvtype nil)))))
+
+(def function foreign-to-gpu-type (type)
+  "Converts a foreign type to a gpu-type object."
+  (make-foreign-gpu-type (canonify-foreign-type type)))
+
 (def (function e) foreign-to-lisp-type (type)
   "Converts a foreign type to a lisp supertype."
-  (lisp-type-of (make-foreign-gpu-type (canonify-foreign-type type))))
+  (lisp-type-of (foreign-to-gpu-type type)))
 
 (def (function e) foreign-to-lisp-elt-type (type)
   "Converts a foreign type to an equivalent lisp array elt type. NIL if none."
@@ -329,7 +367,7 @@
 
 (def (function e) lisp-to-foreign-type (type)
   "Converts a lisp type to a foreign supertype."
-  (foreign-type-of (parse-lisp-type type)))
+  (foreign-type-of (lisp-to-gpu-type type)))
 
 (def (function e) lisp-to-foreign-elt-type (type)
   "Converts a lisp type to an equivalent foreign type. NIL if none."
