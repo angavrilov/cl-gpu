@@ -82,6 +82,26 @@
   (:metaclass interned-class)
   (:documentation "A specific GPU value type."))
 
+(def class gpu-any-type (gpu-concrete-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "An unspecified type."))
+
+(let () (defconstant +gpu-any-type+ (make-instance 'gpu-any-type)))
+
+(def method lisp-type-of ((type gpu-any-type)) t)
+
+(def class gpu-no-type (gpu-concrete-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "A nonexistant type."))
+
+(let () (defconstant +gpu-no-type+ (make-instance 'gpu-no-type)))
+
+(def method lisp-type-of ((type gpu-no-type)) nil)
+
+;; Numbers
+
 (def class gpu-number-type (gpu-concrete-type)
   ((min-value :initform nil :initarg :min-value :reader min-value-of)
    (max-value :initform nil :initarg :max-value :reader max-value-of))
@@ -120,6 +140,11 @@
   ()
   (:documentation "An abstract class denoting types that map to foreign ones."))
 
+(def class gpu-native-number-type (gpu-number-type gpu-native-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "An abstract class denoting foreign number types."))
+
 (def generic make-foreign-gpu-type (id &key)
   (:documentation "Returns a gpu-type object for the specified CFFI type.")
   (:method ((id gpu-type) &key)
@@ -132,6 +157,8 @@
 
 (def layered-function native-type-c-string (type)
   (:documentation "Returns the C string for a native type"))
+
+(def (function i) c-type-string (type) (native-type-c-string type))
 
 (def generic native-type-byte-size (type)
   (:documentation "Returns the byte size of a native type"))
@@ -156,9 +183,8 @@
              (make-instance ',class
                             :min-value ,(if min-limit `(max min-value ,min-limit) 'min-value)
                             :max-value ,(if max-limit `(min max-value ,max-limit) 'max-value))))
-     (let ((foo)) ; Make defconstant non-toplevel to avoid
-                  ; compile-time evaluation
-       (declare (ignore foo))
+     (let () ; Make defconstant non-toplevel to avoid
+             ; compile-time evaluation
        (defconstant ,(symbolicate "+" class "+") (make-foreign-gpu-type ,fid)))
      (def method foreign-type-of ((type ,class))
        ,fid)
@@ -185,7 +211,7 @@
 
 ;; Floating-point native types
 
-(def class gpu-single-float-type (gpu-float-type gpu-native-type)
+(def class gpu-single-float-type (gpu-float-type gpu-native-number-type)
   ()
   (:metaclass interned-class)
   (:documentation "A single-precision floating-point GPU value type."))
@@ -195,7 +221,7 @@
 (def method lisp-type-of ((type gpu-single-float-type))
   (lisp-real-type-name type 'single-float))
 
-(def class gpu-double-float-type (gpu-float-type gpu-native-type)
+(def class gpu-double-float-type (gpu-float-type gpu-native-number-type)
   ()
   (:metaclass interned-class)
   (:documentation "A double-precision floating-point GPU value type."))
@@ -213,7 +239,7 @@
                 for magnitude = (ash 1 (- (* 8 bytes) (if signed? 1 0)))
                 for min-value = (if signed? (- magnitude) 0)
                 for max-value = (1- magnitude)
-                append `((def class ,class-name (gpu-integer-type gpu-native-type)
+                append `((def class ,class-name (gpu-integer-type gpu-native-number-type)
                            ()
                            (:metaclass interned-class)
                            (:default-initargs :min-value ,min-value :max-value ,max-value)
@@ -263,6 +289,44 @@
 (def method lisp-type-of ((type gpu-boolean-type))
   'boolean)
 
+;; Compound types
+
+(def class gpu-compound-type (gpu-concrete-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "An abstract class for compound types."))
+
+(def class gpu-values-type (gpu-compound-type)
+  ((values :initform nil :initarg :values :reader values-of))
+  (:metaclass interned-class)
+  (:documentation "A multiple-value return type."))
+
+(def method lisp-type-of ((type gpu-values-type))
+  (list* 'values (mapcar #'lisp-type-of (values-of type))))
+
+(let ()
+  (defconstant +gpu-void-type+ (make-instance 'gpu-values-type)))
+
+(def layered-method native-type-c-string ((type (eql (make-instance 'gpu-values-type))))
+  "void")
+
+(def class gpu-container-type (gpu-compound-type)
+  ((item-type :initform nil :initarg :item-type :reader item-type-of)
+   (dimensions :initform nil :initarg :dimensions :reader dimensions-of))
+  (:metaclass interned-class)
+  (:documentation "A value container/reference type."))
+
+(def class gpu-array-type (gpu-container-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "An array value types."))
+
+(def method lisp-type-of ((type gpu-array-type))
+  `(array ,(aif (item-type-of type) (lisp-type-of it) '*)
+          ,(aif (dimensions-of type)
+                (mapcar #'nil->* it)
+                '*)))
+
 ;;; Lisp type parsing code
 
 (def generic do-parse-lisp-type (name type-spec &key form)
@@ -284,7 +348,11 @@
           ((subtypep type-spec 'boolean)
            (make-instance 'gpu-boolean-type))
           (t
-           (gpu-code-error form "Unsupported type spec: ~S" type-spec)))))
+           (gpu-code-error form "Unsupported type spec: ~S" type-spec))))
+  (:method ((name gpu-type) type-spec &key form)
+    (declare (ignore form))
+    (assert (eq name type-spec))
+    name))
 
 (def definer lisp-type-parser (name args &body code)
   `(defmethod do-parse-lisp-type ((-name- (eql ',name)) -whole- &key ((:form -form-)))
@@ -307,6 +375,12 @@
      ,@code))
 
 ;; Parsers:
+
+(def lisp-type-parser t ()
+  (make-instance 'gpu-any-type))
+
+(def lisp-type-parser nil ()
+  (make-instance 'gpu-no-type))
 
 (def lisp-type-parser fixnum ()
   (make-instance 'gpu-int32-type))
@@ -338,6 +412,25 @@
 (def lisp-type-parser double-float (&optional min-value max-value)
   (with-no-stars (min-value max-value)
     (make-instance 'gpu-double-float-type :min-value min-value :max-value max-value)))
+
+(def lisp-type-parser values (&rest items)
+  (make-instance 'gpu-values-type :values (mapcar #'-recurse- items)))
+
+(def lisp-type-parser array (&optional (item-type '*) dims)
+  (let ((itype (if (eq item-type '*) nil (-recurse- item-type)))
+        (dimv (cond ((or (null dims) (eq dims '*))
+                     nil)
+                    ((numberp dims)
+                     (loop for i from 1 to dims collect nil))
+                    ((consp dims)
+                     (mapcar #'*->nil dims))
+                    (t
+                     (gpu-code-error -form- "Invalid array type spec: ~S" -whole-)))))
+    (make-instance 'gpu-array-type :item-type itype :dimensions dimv)))
+
+(def lisp-type-parser vector (&optional (item-type '*) dim)
+  (let ((itype (if (eq item-type '*) nil (-recurse- item-type))))
+    (make-instance 'gpu-array-type :item-type itype :dimensions (list (*->nil dim)))))
 
 ;;; Type conversion functions
 

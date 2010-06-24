@@ -80,7 +80,7 @@
                                     'cuda-debug-mem-array
                                     'cuda-mem-array)
                                 :blk blk :size size
-                                :elt-type :uint8 :elt-size 1
+                                :elt-type +gpu-uint8-type+ :elt-size 1
                                 :dims (to-uint32-vector (list size))
                                 :strides (to-uint32-vector (list size)))))
     (setf (blk-of -self-) blk
@@ -279,7 +279,7 @@
                  (declare (type cuda-mem-array ,obj))
                  (with-slots (blk elt-type size dims strides) ,obj
                    (with-cuda-context ((cuda-linear-context blk))
-                     (assert (equal elt-type ',item-type))
+                     (assert (eq elt-type ,item-type))
                      (cuda-param-set-uint32 ,fhandle ,offset (cuda-linear-ensure-handle blk))
                      ,@(remove-if #'null items))))))))))
 

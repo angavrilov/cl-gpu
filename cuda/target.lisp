@@ -66,13 +66,10 @@
 
 ;;; C types
 
-(def layered-method c-type-string :in cuda-target (type)
-  (case type
-    (:int64 "long long")
-    (:uint64 "unsigned long long")
-    (otherwise (call-next-method))))
+(def layered-method native-type-c-string :in cuda-target ((type gpu-int64-type)) "long long")
+(def layered-method native-type-c-string :in cuda-target ((type gpu-uint64-type)) "unsigned long long")
 
-(def layered-method c-type-string :in cuda-target ((type cons))
+#|(def layered-method c-type-string :in cuda-target ((type cons))
   (case (first type)
     (:tuple (let ((size (second type))
                   (base (third type)))
@@ -90,7 +87,7 @@
                         (:float "float") (:double "double")
                         (t (gpu-code-error nil "Invalid tuple type ~A" base)))
                       size)))
-    (otherwise (call-next-method))))
+    (otherwise (call-next-method))))|#
 
 (def layered-method c-type-size :in cuda-target (type)
   (case type

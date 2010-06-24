@@ -10,36 +10,16 @@
 
 (in-package :cl-gpu)
 
-(def function parse-atomic-type (type-spec &key form)
-  (or (lisp-to-foreign-type type-spec)
-      (gpu-code-error form "Unknown atomic type: ~S" type-spec)))
-
 (def function parse-global-type (type-spec &key form)
-  (multiple-value-bind (rspec expanded?)
-      (expand-gpu-type (ensure-car type-spec)
-                       (if (consp type-spec) (cdr type-spec)))
-    (cond (expanded?
-           (parse-global-type rspec :form form))
-          ((consp type-spec)
-           (ecase (first type-spec)
-             (array
-              (destructuring-bind (&optional item-type dim-spec) (rest type-spec)
-                (when (or (null item-type) (eql item-type '*)
-                          (null dim-spec) (eql dim-spec '*))
-                  (gpu-code-error form "Insufficiently specific type spec: ~S" type-spec))
-                (values (parse-atomic-type item-type :form form)
-                        (if (numberp dim-spec)
-                            (make-array dim-spec :initial-element nil)
-                            (coerce (mapcar (lambda (x) (if (numberp x) x nil)) dim-spec)
-                                    'vector)))))
-             (vector
-              (destructuring-bind (&optional item-type dim-spec) (rest type-spec)
-                (when (or (null item-type) (eql item-type '*))
-                  (gpu-code-error form "Insufficiently specific type spec: ~S" type-spec))
-                (values (parse-atomic-type item-type :form form)
-                        (if (numberp dim-spec) (vector dim-spec) (vector nil)))))))
-          (t
-           (parse-atomic-type type-spec :form form)))))
+  (atypecase (parse-lisp-type type-spec :form form)
+    (gpu-array-type
+     (when (or (not (typep (item-type-of it) 'gpu-native-type))
+               (null (dimensions-of it)))
+       (gpu-code-error form "Insufficiently specific type spec: ~S" type-spec))
+     (values (item-type-of it) (coerce (dimensions-of it) 'vector)))
+    (gpu-native-type it)
+    (t
+     (gpu-code-error form "Type annotation is too abstract: ~S" type-spec))))
 
 (def function parse-local-type (type-spec &key form)
   (if (unknown-type? type-spec)
@@ -59,27 +39,6 @@
                (declared-type-of it))))
 
 ;;; Type properties
-
-(def layered-function c-type-string (type)
-  (:documentation "Return a string that represents the type in C")
-  (:method ((type cons))
-    (ecase (first type)
-      (:pointer
-       (format nil "~A*"
-               (c-type-string (or (second type) :void))))))
-  (:method (type)
-    (ecase type
-      (:void "void")
-      (:pointer "void*")
-      (:boolean "int")
-      (:float "float")
-      (:double "double")
-      (:uint8 "unsigned char")
-      (:int8 "char")
-      (:uint16 "unsigned short")
-      (:int16 "short")
-      (:uint32 "unsigned int")
-      (:int32 "int"))))
 
 (def layered-function c-type-size (type)
   (:documentation "Return the size of the type in bytes")

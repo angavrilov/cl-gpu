@@ -12,10 +12,16 @@
 
 ;;; Misc
 
-(declaim (inline ensure-cdr))
+(declaim (inline ensure-cdr *->nil nil->*))
 
 (def function ensure-cdr (item)
   (if (consp item) (cdr item)))
+
+(def function *->nil (x)
+  (if (eq x '*) nil x))
+
+(def function nil->* (x)
+  (or x '*))
 
 (def macro gethash-with-init (key table init-expr)
   "Looks up the key in the table. When not found, lazily initializes with init-expr."

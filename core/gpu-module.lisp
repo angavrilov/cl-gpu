@@ -168,7 +168,7 @@
   ((index          :documentation "Ordinal for fast access")
    (invoker-form   :documentation "Lambda form of the invoker.")
    (invoker-fun    :documentation "Compiled invoker."))
-  (:default-initargs :return-type :void)
+  (:default-initargs :return-type +gpu-void-type+)
   (:documentation "A kernel callable from the host"))
 
 (def class* test-gpu-kernel (gpu-kernel)

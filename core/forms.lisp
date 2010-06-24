@@ -14,7 +14,8 @@
 
 ;; Some ad-hoc attribute definitions
 
-(def form-attribute-accessor form-c-type)
+(def (form-attribute-accessor :debug t) form-c-type
+  :type (or gpu-type null))
 
 (def form-attribute-accessor gpu-variable
   #|:type (or gpu-variable null)|# :forms name-definition-form)
@@ -176,9 +177,10 @@
   (destructuring-bind ((ret-type &key statement?) &rest code)
       (rest -form-)
     (with-form-object (vcode 'verbatim-code-form -parent-
-                             :form-c-type ret-type
                              :is-expression? (not statement?))
-      (setf (body-of vcode)
+      (setf (form-c-type-of vcode)
+            (parse-lisp-type ret-type :form vcode)
+            (body-of vcode)
             (mapcar (lambda (form) (recurse form vcode)) code)))))
 
 (def unwalker verbatim-code-form (body form-c-type is-expression?)
