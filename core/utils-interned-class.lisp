@@ -72,17 +72,23 @@
   ()
   (:metaclass interned-class))
 
+(def method initarg-values-of ((object interned-object))
+  (let ((class (class-of object)))
+    (declare (type interned-class class))
+    (with-slots (obj-initargs-fun) class
+      (funcall obj-initargs-fun object))))
+
 (def method make-load-form ((object interned-object) &optional env)
   (declare (ignore env))
-  (let ((class (class-of object)))
-    (with-slots (obj-initargs-fun) class
-      `(make-instance ',(class-name class) ,@(funcall obj-initargs-fun object)))))
+  `(make-instance ',(class-name (class-of object)) ,@(initarg-values-of object)))
 
 (def method print-object ((object interned-object) stream)
-  (let ((class (class-of object)))
-    (with-slots (obj-initargs-fun) class
-      (print-unreadable-object (object stream :type t :identity nil)
-        (format stream "~{~S~^ ~}" (funcall obj-initargs-fun object))))))
+  (print-unreadable-object (object stream :type t :identity nil)
+    (format stream "~{~S~^ ~}" (initarg-values-of object))))
+
+(def function reintern-as-class (instance class &rest new-args)
+  "Interns an object of the specified class, using initargs derived from the instance."
+  (apply #'make-instance class (append new-args (list* :allow-other-keys t (initarg-values-of instance)))))
 
 #|
 (def class test-interned (interned-object)
