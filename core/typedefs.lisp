@@ -140,6 +140,12 @@
   ()
   (:documentation "An abstract class denoting types that map to foreign ones."))
 
+(def layered-function specific-type-p (type)
+  (:documentation "Determines if the type is fully specific")
+  (:method ((type gpu-type)) nil)
+  (:method ((type null)) nil)
+  (:method ((type gpu-native-type)) t))
+
 (def class gpu-native-number-type (gpu-number-type gpu-native-type)
   ()
   (:metaclass interned-class)
@@ -163,8 +169,12 @@
 (def generic native-type-byte-size (type)
   (:documentation "Returns the byte size of a native type"))
 
+(def (function i) c-type-size (type) (native-type-byte-size type))
+
 (def layered-function native-type-alignment (type)
   (:documentation "Returns the byte alignment requirements of a native type"))
+
+(def (function i) c-type-alignment (type) (native-type-alignment type))
 
 (def generic native-type-ref (type ptr offset)
   (:documentation "Reads the native type value from the specified ptr & offset."))
@@ -172,9 +182,7 @@
 (def generic (setf native-type-ref) (value type ptr offset)
   (:documentation "Writes the native type value to the specified ptr & offset."))
 
-(def macro def-native-type-info (class fid cstring size alignment &key min-limit max-limit not-number?
-                                       &aux (fp-type #+ecl 'si:foreign-data
-                                                     #+openmcl 'ccl:macptr))
+(def macro def-native-type-info (class fid cstring size alignment &key min-limit max-limit not-number?)
   `(progn
      ,(if not-number?
           `(def method make-foreign-gpu-type ((id (eql ,fid)) &key)
@@ -191,6 +199,12 @@
      ,(when cstring
             `(def layered-method native-type-c-string ((type ,class))
                ,cstring))
+     (def-native-type-refs ,class ,fid ,size ,alignment)))
+
+(def macro def-native-type-refs (class fid size alignment
+                                       &aux (fp-type +foreign-pointer-type-name+))
+  (assert (= size (foreign-type-size fid)))
+  `(progn
      (def method native-type-byte-size ((type ,class))
        ,size)
      (def layered-method native-type-alignment ((type ,class))
@@ -327,6 +341,90 @@
                 (mapcar #'nil->* it)
                 '*)))
 
+(def layered-method specific-type-p ((type gpu-array-type))
+  (and (dimensions-of type) (specific-type-p (item-type-of type))))
+
+(def class gpu-pointer-type (gpu-container-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "A generic pointer value type."))
+
+(def layered-method specific-type-p ((type gpu-pointer-type))
+  t)
+
+(def layered-method native-type-c-string ((type gpu-pointer-type))
+  (if (specific-type-p (item-type-of type))
+      (concatenate 'string (native-type-c-string (item-type-of type)) "*")
+      "void*"))
+
+(def class gpu-32b-pointer-type (gpu-pointer-type gpu-native-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "A 32-bit pointer value type."))
+
+(def-native-type-refs gpu-32b-pointer-type :uint32 4 4)
+
+(def class gpu-64b-pointer-type (gpu-pointer-type gpu-native-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "A 64-bit pointer value type."))
+
+(def-native-type-refs gpu-64b-pointer-type :uint64 8 8)
+
+(def layered-function default-pointer-type ()
+  (:documentation "Returns the class of the usual pointer type. To be redefined by targets.")
+  (:method () 'gpu-pointer-type))
+
+;; Tuple (fixed vector) type
+
+(def class gpu-tuple-type (gpu-compound-type gpu-native-type)
+  ((item-type :initform nil :initarg :item-type :reader item-type-of)
+   (size :initform nil :initarg :size :reader size-of)
+   (item-lisp-type)
+   (item-byte-size))
+  (:metaclass interned-class)
+  (:documentation "A tuple type."))
+
+(def constructor gpu-tuple-type
+  (with-slots (item-type item-lisp-type item-byte-size) -self-
+    ;; Cache some properties of the item for use in native-type-ref
+    (when item-type
+      (setf item-lisp-type (lisp-type-of item-type)
+            item-byte-size (ignore-errors (native-type-byte-size item-type))))))
+
+(def method lisp-type-of ((type gpu-tuple-type))
+  `(tuple ,(aif (item-type-of type) (lisp-type-of it) '*)
+          ,(nil->* (size-of type))))
+
+(def layered-method specific-type-p ((type gpu-tuple-type))
+  (and (size-of type) (specific-type-p (item-type-of type))))
+
+(def method native-type-byte-size ((type gpu-tuple-type))
+  (* (native-type-byte-size (item-type-of type)) (size-of type)))
+
+(def layered-method native-type-alignment ((type gpu-tuple-type))
+  (* (extract-power-of-two (size-of type))
+     (native-type-alignment (item-type-of type))))
+
+(def method native-type-ref ((type gpu-tuple-type) ptr offset)
+  (with-slot-values (item-type item-lisp-type item-byte-size size) type
+    (assert (and item-byte-size size))
+    (let ((result (make-array (list size) :element-type item-lisp-type)))
+      (loop for i from 0 below size
+         do (setf (row-major-aref result i)
+                  (native-type-ref item-type ptr (+ offset (* i item-byte-size)))))
+      result)))
+
+(def method (setf native-type-ref) (value (type gpu-tuple-type) ptr offset)
+  (check-type value array)
+  (with-slot-values (item-type item-byte-size size) type
+    (assert (and item-byte-size size))
+    (assert (= size (array-total-size value)))
+    (loop for i from 0 below size
+       do (setf (native-type-ref item-type ptr (+ offset (* i item-byte-size)))
+                (row-major-aref value i)))
+    value))
+
 ;;; Lisp type parsing code
 
 (def generic do-parse-lisp-type (name type-spec &key form)
@@ -358,7 +456,8 @@
   `(defmethod do-parse-lisp-type ((-name- (eql ',name)) -whole- &key ((:form -form-)))
      (declare (ignorable -name- -form-))
      (flet ((-recurse- (type)
-              (parse-lisp-type type :form -form-)))
+              (if (eq type '*) nil
+                  (parse-lisp-type type :form -form-))))
        (block ,name
          (destructuring-bind ,args (ensure-cdr -whole-)
            ,@code)))))
@@ -417,8 +516,7 @@
   (make-instance 'gpu-values-type :values (mapcar #'-recurse- items)))
 
 (def lisp-type-parser array (&optional (item-type '*) dims)
-  (let ((itype (if (eq item-type '*) nil (-recurse- item-type)))
-        (dimv (cond ((or (null dims) (eq dims '*))
+  (let ((dimv (cond ((or (null dims) (eq dims '*))
                      nil)
                     ((numberp dims)
                      (loop for i from 1 to dims collect nil))
@@ -426,11 +524,13 @@
                      (mapcar #'*->nil dims))
                     (t
                      (gpu-code-error -form- "Invalid array type spec: ~S" -whole-)))))
-    (make-instance 'gpu-array-type :item-type itype :dimensions dimv)))
+    (make-instance 'gpu-array-type :item-type (-recurse- item-type) :dimensions dimv)))
 
 (def lisp-type-parser vector (&optional (item-type '*) dim)
-  (let ((itype (if (eq item-type '*) nil (-recurse- item-type))))
-    (make-instance 'gpu-array-type :item-type itype :dimensions (list (*->nil dim)))))
+  (make-instance 'gpu-array-type :item-type (-recurse- item-type) :dimensions (list (*->nil dim))))
+
+(def lisp-type-parser tuple (item-type &optional size)
+  (make-instance 'gpu-tuple-type :item-type (-recurse- item-type) :size (*->nil size)))
 
 ;;; Type conversion functions
 

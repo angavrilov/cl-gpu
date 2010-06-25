@@ -12,6 +12,10 @@
 
 ;;; Misc
 
+(defconstant +foreign-pointer-type-name+
+  #+ecl 'si:foreign-data
+  #+openmcl 'ccl:macptr)
+
 (declaim (inline ensure-cdr *->nil nil->*))
 
 (def function ensure-cdr (item)
@@ -60,6 +64,8 @@
                     (eq (name-of item) name)))
              forms))
 
+(define-modify-macro remove-form-by-name! (name &rest flags) remove-form-by-name)
+
 (def function extract-power-of-two (value)
   "Returns the integer part of base-2 logarithm and the remainder."
   (loop for i from 0
@@ -67,13 +73,19 @@
      return (values i value)
      else do (setf value (ash value -1))))
 
-(define-modify-macro remove-form-by-name! (name &rest flags) remove-form-by-name)
-
 (def function make-type-arg (sym)
   (format-symbol t "~A/TYPE" sym))
 
 (def function eql-spec-if (predicate value)
   (if (funcall predicate value) `(eql ,value) value))
+
+(def macro with-slot-values (slots object &body code)
+  (once-only (object)
+    `(let ,(loop for spec in slots
+              for name = (ensure-car spec)
+              for slot = (if (consp spec) (second spec) `(quote ,name))
+              collect `(,name (slot-value ,object ,slot)))
+       ,@code)))
 
 ;;; Builtin function handler definitions
 

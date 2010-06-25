@@ -13,25 +13,19 @@
 (def function parse-global-type (type-spec &key form)
   (atypecase (parse-lisp-type type-spec :form form)
     (gpu-array-type
-     (when (or (not (typep (item-type-of it) 'gpu-native-type))
-               (null (dimensions-of it)))
+     (unless (specific-type-p it)
        (gpu-code-error form "Insufficiently specific type spec: ~S" type-spec))
      (values (item-type-of it) (coerce (dimensions-of it) 'vector)))
-    (gpu-native-type it)
     (t
-     (gpu-code-error form "Type annotation is too abstract: ~S" type-spec))))
+     (unless (specific-type-p it)
+       (gpu-code-error form "Type annotation is too abstract: ~S" type-spec))
+     it)))
 
 (def function parse-local-type (type-spec &key form)
-  (if (unknown-type? type-spec)
-      nil
-      (cond ((and (consp type-spec)
-                  (eq (car type-spec) 'tuple))
-             `(:tuple ,(third type-spec)
-                      ,(parse-atomic-type (second type-spec) :form form)))
-            (t
-             (multiple-value-bind (item dims)
-                 (parse-global-type type-spec :form form)
-               (if dims `(:pointer ,item) item))))))
+  (atypecase (parse-lisp-type type-spec :form form)
+    (gpu-array-type
+     (reintern-as-class it (default-pointer-type)))
+    (t it)))
 
 (def function get-local-var-decl-type (pdecls name)
   (aif (find-form-by-name name pdecls :type 'type-declaration-form)

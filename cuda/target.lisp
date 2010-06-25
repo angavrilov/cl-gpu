@@ -69,35 +69,27 @@
 (def layered-method native-type-c-string :in cuda-target ((type gpu-int64-type)) "long long")
 (def layered-method native-type-c-string :in cuda-target ((type gpu-uint64-type)) "unsigned long long")
 
-#|(def layered-method c-type-string :in cuda-target ((type cons))
-  (case (first type)
-    (:tuple (let ((size (second type))
-                  (base (third type)))
-              (unless (and (> size 0)
-                           (<= size (case base
-                                      ((:double :int64) 2)
-                                      (t 4))))
-                (gpu-code-error nil "Invalid size ~A for tuple of ~A" size base))
-              (format nil "~A~A"
-                      (case base
-                        (:int8 "char") (:uint8 "uchar")
-                        (:int16 "short") (:uint16 "ushort")
-                        (:int32 "int") (:uint32 "uint")
-                        (:int64 "longlong")
-                        (:float "float") (:double "double")
-                        (t (gpu-code-error nil "Invalid tuple type ~A" base)))
-                      size)))
-    (otherwise (call-next-method))))|#
+(def layered-method native-type-c-string :in cuda-target ((type gpu-tuple-type))
+  (with-slot-values (item-type item-byte-size size) type
+    (unless (and (> size 0)
+                 (<= size (case item-byte-size
+                            (8 2)
+                            (t 4))))
+      (gpu-code-error nil "Invalid size ~A for tuple of ~A" size (foreign-type-of item-type)))
+    (format nil "~A~A"
+            (typecase item-type
+              (gpu-int8-type "char") (gpu-uint8-type "uchar")
+              (gpu-int16-type "short") (gpu-uint16-type "ushort")
+              (gpu-int32-type "int") (gpu-uint32-type "uint")
+              (gpu-int64-type "longlong")
+              (gpu-single-float-type "float") (gpu-double-float-type "double")
+              (t (gpu-code-error nil "Invalid tuple type ~A" item-type)))
+            size)))
 
-(def layered-method c-type-size :in cuda-target (type)
-  (case type
-    (:pointer +cuda-ptr-size+)
-    (otherwise (call-next-method))))
+(def layered-method default-pointer-type :in cuda-target () 'gpu-32b-pointer-type)
 
-(def layered-method c-type-alignment :in cuda-target (type)
-  (case type
-    (:pointer +cuda-ptr-size+)
-    (otherwise (call-next-method))))
+(def layered-method specific-type-p :in cuda-target ((type gpu-32b-pointer-type)) t)
+(def layered-method specific-type-p :in cuda-target ((type gpu-pointer-type)) nil)
 
 ;;; Abort command
 
