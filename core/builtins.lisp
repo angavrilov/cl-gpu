@@ -103,14 +103,14 @@
   (cerror "continue" "Barriers are only supported in GPU code"))
 
 (def type-computer barrier (&optional mode)
-  (unless (or (null mode) (eq mode/type :keyword))
+  (unless (or (null mode) (eq mode/type +gpu-keyword-type+))
     (gpu-code-error -form- "Barrier type must be a keyword constant."))
-  :void)
+  +gpu-void-type+)
 
 ;;; AREF
 
 (def function walk-aref-type-core (form arr indexes &key (value nil v-p)
-                                        (item-type-fun #'second) (index-bias 0)
+                                        (item-type-fun #'item-type-of) (index-bias 0)
                                         access-prefix-fun)
   (declare (ignore access-prefix-fun))
   (with-type-arg-walker-lexicals
@@ -121,19 +121,19 @@
                  (+ (length indexes) index-bias))
         (gpu-code-error form "Incorrect array index count."))
       (dolist (idx indexes)
-        (recurse idx :upper-type :uint32))
+        (recurse idx :upper-type +gpu-uint32-type+))
       (when v-p
         (recurse value :upper-type item-type)))))
 
 (def function type-aref-core (form arr indexes &key (value nil v-p)
-                                   (item-type-fun #'second) (index-bias 0)
+                                   (item-type-fun #'item-type-of) (index-bias 0)
                                    access-prefix-fun)
   (declare (ignore index-bias access-prefix-fun))
   (let* ((arr/type (form-c-type-of arr))
          (item-type (funcall item-type-fun arr/type)))
     (loop for idx in indexes
-       do (verify-cast idx :uint32 form :prefix "index"
-                       :allow '(:int32) :error-on-warn? t))
+       do (verify-cast idx +gpu-uint32-type+ form :prefix "index"
+                       :silent-signed? t :error-on-warn? t))
     (when v-p
       (verify-cast value item-type form :silent-signed? nil))
     item-type))
@@ -151,7 +151,7 @@
   (is-optimize-level-any? :check-bounds 1 'safety 1))
 
 (def function emit-aref-core (form var indexes stream &key value
-                                   (item-type-fun #'second) (index-bias 0)
+                                   (item-type-fun #'item-type-of) (index-bias 0)
                                    (access-prefix-fun (constantly "*"))
                                    (access-base-fun #'generate-var-ref))
   (declare (ignore item-type-fun))
@@ -225,24 +225,24 @@
 ;;; RAW-AREF
 
 (def function walk-raw-aref-type-core (form arr index &key (value nil v-p)
-                                            item-type-fun
+                                            (item-type-fun #'item-type-of)
                                             access-prefix-fun access-range-fun)
-  (declare (ignore form item-type-fun access-prefix-fun access-range-fun))
+  (declare (ignore form access-prefix-fun access-range-fun))
   (with-type-arg-walker-lexicals
     (let ((arr/type (recurse arr)))
       (verify-array-var arr)
-      (recurse index :upper-type :uint32)
+      (recurse index :upper-type +gpu-uint32-type+)
       (when v-p
-        (recurse value :upper-type (second arr/type))))))
+        (recurse value :upper-type (funcall item-type-fun arr/type))))))
 
 (def function type-raw-aref-core (form arr index &key (value nil v-p)
-                                       (item-type-fun #'second)
+                                       (item-type-fun #'item-type-of)
                                        access-range-fun access-prefix-fun)
   (declare (ignore access-prefix-fun access-range-fun))
   (let* ((arr/type (form-c-type-of arr))
          (item-type (funcall item-type-fun arr/type)))
-    (verify-cast index :uint32 form :prefix "index"
-                 :allow '(:int32) :error-on-warn? t)
+    (verify-cast index +gpu-uint32-type+ form :prefix "index"
+                 :silent-signed? t :error-on-warn? t)
     (when v-p
       (verify-cast (form-c-type-of value) item-type form :silent-signed? nil))
     item-type))
@@ -311,11 +311,11 @@
 
 (def type-computer array-total-size (arr)
   (verify-array-var arr)
-  :uint32)
+  +gpu-uint32-type+)
 
 (def type-computer array-raw-extent (arr)
   (verify-array-var arr)
-  :uint32)
+  +gpu-uint32-type+)
 
 (def type-computer array-dimension (var dimidx)
   (verify-array-var var)
@@ -324,7 +324,7 @@
     (unless (and (>= cval 0)
                  (< cval (length (dimension-mask-of gvar))))
       (gpu-code-error -form- "Dimension index out of bounds: ~S" cval)))
-  :uint32)
+  +gpu-uint32-type+)
 
 (def type-computer array-raw-stride (var dimidx)
   (verify-array-var var)
@@ -333,7 +333,7 @@
     (unless (and (>= cval 0)
                  (< cval (1- (length (dimension-mask-of gvar)))))
       (gpu-code-error -form- "Stride index out of bounds: ~S" cval)))
-  :uint32)
+  +gpu-uint32-type+)
 
 (def c-code-emitter array-total-size (var)
   (emit "~A" (generate-array-size (ensure-gpu-var var))))
@@ -354,7 +354,7 @@
 
 (def type-computer array-raw-index (arr &rest indexes)
   (type-aref-core -form- arr indexes)
-  :uint32)
+  +gpu-uint32-type+)
 
 (def is-statement? array-raw-index (arr &rest indexes)
   (generate-bound-checks?))
@@ -366,28 +366,25 @@
 
 ;;; Tuples
 
-(def function ensure-scalar-result (args-or-types form &key prefix)
-  (ensure-common-type args-or-types form :prefix prefix
-                      :types '(:int8 :uint8 :int16 :uint16 :int32 :uint32
-                               :int64 :uint64 :float :double)))
+(def function ensure-scalar-result (args-or-types form &key prefix with-limits?)
+  (ensure-common-type args-or-types form :prefix prefix :with-limits? with-limits?))
 
 (def type-computer tuple (&rest items)
-  (let ((rtype (ensure-scalar-result items -form-)))
-    `(:tuple ,(length items) ,rtype)))
+  (let ((rtype (ensure-scalar-result items -form- :with-limits? t)))
+    (make-instance 'gpu-tuple-type :item-type rtype :size (length items))))
 
 (def type-computer untuple (tuple)
-  (unless (and (consp tuple/type)
-               (eq (first tuple/type) :tuple))
+  (unless (typep tuple/type 'gpu-tuple-type)
     (gpu-code-error -form- "The argument must be a tuple expression."))
   (let ((size (if -upper-type-
-                  (min (second tuple/type)
+                  (min (size-of tuple/type)
                        (length (unwrap-values-type -upper-type-)))
-                  (second tuple/type)))
-        (base (third tuple/type)))
+                  (size-of tuple/type)))
+        (base (item-type-of tuple/type)))
     (wrap-values-type (loop for i from 0 below size collect base))))
 
 (def is-statement? untuple (tuple)
-  (values-c-type? (form-c-type-of -form-)))
+  (typep (form-c-type-of -form-) 'gpu-values-type))
 
 ;; code generators are target-specific
 
@@ -397,7 +394,7 @@
          (size (aref dims (1- (length dims)))))
     (unless (integerp size)
       (gpu-code-error (parent-of arr) "The array argument must have a constant last dimension."))
-    `(:tuple ,size ,(second type))))
+    (make-instance 'gpu-tuple-type :item-type (item-type-of type) :size size)))
 
 (def function tuple-aref-cprefix (form)
   (format nil "*(~A*)" (c-type-string (form-c-type-of form))))
@@ -409,10 +406,10 @@
 
 (def function tuple-raw-aref-rv-type (size type)
   (let ((size (ensure-int-constant size)))
-    `(:tuple ,size ,(second type))))
+    (make-instance 'gpu-tuple-type :item-type (item-type-of type) :size size)))
 
 (def function tuple-raw-aref-range (form)
-  (second (form-c-type-of form)))
+  (size-of (form-c-type-of form)))
 
 (def raw-aref-like-builtin tuple-raw-aref (count)
   :item-type-fun (curry #'tuple-raw-aref-rv-type count)
@@ -422,9 +419,8 @@
 ;;; Arithmetics
 
 (def function ensure-arithmetic-result (args-or-types form &key prefix (silent-signed? t))
-  (ensure-common-type args-or-types form :prefix prefix
-                      :types '(:int32 :uint32 :int64 :uint64 :float :double)
-                      :silent-signed? silent-signed?))
+  (ensure-common-type args-or-types form :prefix prefix :silent-signed? silent-signed?
+                      :promotion #'promote-type-to-arithmetic))
 
 (def definer delimited-builtin (name op &key zero single-pfix
                                       (typechecker 'ensure-arithmetic-result))
@@ -440,14 +436,14 @@
 (def function ensure-div-result-type (args-or-types form)
   (if (cdr args-or-types)
       (ensure-arithmetic-result args-or-types form)
-      (ensure-common-type args-or-types form :types '(:float :double))))
+      (ensure-common-type args-or-types form :promotion #'promote-type-to-float)))
 
 (def delimited-builtin + "+" :zero 0)
 (def delimited-builtin - "-" :zero 0 :single-pfix "-")
 (def delimited-builtin * "*" :zero 1)
 (def delimited-builtin / "/" :zero 1.0
   :typechecker ensure-div-result-type
-  :single-pfix (if (eq (form-c-type-of -form-) :double)
+  :single-pfix (if (typep (form-c-type-of -form-) 'gpu-double-float-type)
                    "1.0/" "1.0f/"))
 
 (def definer arithmetic-builtin (name args &body code)
@@ -465,13 +461,13 @@
 
 (def arithmetic-builtin abs (arg)
   (emit "~A("
-        (ecase (form-c-type-of -form-)
-          (:int32 "abs")
-          (:uint32 "")
-          (:int64 "llabs")
-          (:uint64 "")
-          (:float "fabsf")
-          (:double "fabs")))
+        (etypecase (form-c-type-of -form-)
+          (gpu-int32-type "abs")
+          (gpu-uint32-type "")
+          (gpu-int64-type "llabs")
+          (gpu-uint64-type "")
+          (gpu-single-float-type "fabsf")
+          (gpu-double-float-type "fabs")))
   (code arg ")"))
 
 ;;; Comparisons and logical ops
@@ -481,21 +477,21 @@
   `(> ,arg 0))
 
 (def type-computer not (arg)
-  (verify-cast arg :boolean -form-))
+  (verify-cast arg +gpu-boolean-type+ -form-))
 
 (def c-code-emitter not (arg)
   (code "!" arg))
 
 (def type-computer zerop (arg)
   (ensure-arithmetic-result (list arg) -form-)
-  :boolean)
+  +gpu-boolean-type+)
 
 (def c-code-emitter zerop (arg)
   (code "(" arg "==0)"))
 
 (def type-computer nonzerop (arg)
   (ensure-arithmetic-result (list arg) -form-)
-  :boolean)
+  +gpu-boolean-type+)
 
 (def c-code-emitter nonzerop (arg)
   (code "(" arg "!=0)"))
@@ -521,10 +517,10 @@
              (expand-comparison-chain form args ,any-count?)))
      (def type-computer ,name (arg1 arg2)
        ,(if any-type?
-            `(or (equal arg1/type arg2/type)
+            `(or (eq arg1/type arg2/type)
                  (ensure-arithmetic-result -arguments- -form- :silent-signed? nil))
             `(ensure-arithmetic-result -arguments- -form- :silent-signed? nil))
-       :boolean)
+       +gpu-boolean-type+)
      (def c-code-emitter ,name (arg1 arg2)
        (code "(" arg1 ,operator arg2 ")"))))
 
@@ -540,8 +536,8 @@
 
 (def type-computer and (&rest args)
   (dolist (arg args)
-    (verify-cast arg :boolean -form-))
-  :boolean)
+    (verify-cast arg +gpu-boolean-type+ -form-))
+  +gpu-boolean-type+)
 
 (def c-code-emitter and (&rest args)
   (if (null args)
@@ -550,8 +546,8 @@
 
 (def type-computer or (&rest args)
   (dolist (arg args)
-    (verify-cast arg :boolean -form-))
-  :boolean)
+    (verify-cast arg +gpu-boolean-type+ -form-))
+  +gpu-boolean-type+)
 
 (def c-code-emitter or (&rest args)
   (if (null args)
@@ -562,7 +558,7 @@
 
 (def function ensure-bitwise-result (args-or-types form &key prefix)
   (aprog1 (ensure-arithmetic-result args-or-types form :prefix prefix)
-    (when (member it '(:float :double))
+    (when (typep it 'gpu-float-type)
       (gpu-code-error form "Floating-point arguments not allowed."))))
 
 (def definer bitwise-builtin (name args &body code)
@@ -609,11 +605,10 @@
 ;;; Trigonometry etc
 
 (def function ensure-float-result (args-or-types form &key prefix)
-  (ensure-common-type args-or-types form :prefix prefix
-                      :types '(:float :double)))
+  (ensure-common-type args-or-types form :prefix prefix :promotion #'promote-type-to-float))
 
 (def function float-name-tag (type)
-  (ecase type (:double "") (:float "f")))
+  (etypecase type (gpu-double-float-type "") (gpu-single-float-type "f")))
 
 (def definer float-builtin (name args &body code)
   `(progn
@@ -657,20 +652,18 @@
     (:method (stream type (base null) arg)
       (declare (ignore stream))
       (gpu-code-error arg "Invalid return type in emit-log-c-code: ~A" type)))
-  (mklog (:float 10)    (code "log10f(" arg ")"))
-  (mklog (:float 2)     (code "log2f(" arg ")"))
-  (mklog (:float null)  (code "logf(" arg ")"))
-  (mklog (:float null real)
-         (code (log (float arg 1.0))))
-  (mklog (:float real real)
-         (code (log (float arg 1.0) base)))
-  (mklog (:double 10)   (code "log10(" arg ")"))
-  (mklog (:double 2)    (code "log2(" arg ")"))
-  (mklog (:double null) (code "log(" arg ")"))
-  (mklog (:double null real)
-         (code (log (float arg 1.0d0))))
-  (mklog (:double real real)
-         (code (log (float arg 1.0d0) base))))
+  ;; float
+  (mklog (gpu-single-float-type 10)        (code "log10f(" arg ")"))
+  (mklog (gpu-single-float-type 2)         (code "log2f(" arg ")"))
+  (mklog (gpu-single-float-type null)      (code "logf(" arg ")"))
+  (mklog (gpu-single-float-type null real) (code (log (float arg 1.0))))
+  (mklog (gpu-single-float-type real real) (code (log (float arg 1.0) base)))
+  ;; double
+  (mklog (gpu-double-float-type 10)        (code "log10(" arg ")"))
+  (mklog (gpu-double-float-type 2)         (code "log2(" arg ")"))
+  (mklog (gpu-double-float-type null)      (code "log(" arg ")"))
+  (mklog (gpu-double-float-type null real) (code (log (float arg 1.0d0))))
+  (mklog (gpu-double-float-type real real) (code (log (float arg 1.0d0) base))))
 
 (def float-builtin log (arg &optional base)
   (emit-log-c-code -stream- (form-c-type-of -form-) (or (constant-number-value base) base) arg))
@@ -686,16 +679,18 @@
                   ,@code))))
   (def layered-function emit-exp-c-code (stream type base arg)
     (:documentation "Emits code for an exponentiation, dispatching on the type and base."))
-  (mkexp (:float 10)    (code "exp10f(" arg ")"))
-  (mkexp (:float 2)     (code "exp2f(" arg ")"))
-  (mkexp (:float null)  (code "expf(" arg ")"))
-  (mkexp (:float real)  (code "expf(" arg "*" (log (float base 1.0)) ")"))
-  (mkexp (:float t)     (code "powf(" base "," arg ")"))
-  (mkexp (:double 10)   (code "exp10(" arg ")"))
-  (mkexp (:double 2)    (code "exp2(" arg ")"))
-  (mkexp (:double null) (code "exp(" arg ")"))
-  (mkexp (:double real) (code "exp(" arg "*" (log (float base 1.0d0)) ")"))
-  (mkexp (:double t)    (code "pow(" base "," arg ")")))
+  ;; float
+  (mkexp (gpu-single-float-type 10)   (code "exp10f(" arg ")"))
+  (mkexp (gpu-single-float-type 2)    (code "exp2f(" arg ")"))
+  (mkexp (gpu-single-float-type null) (code "expf(" arg ")"))
+  (mkexp (gpu-single-float-type real) (code "expf(" arg "*" (log (float base 1.0)) ")"))
+  (mkexp (gpu-single-float-type t)    (code "powf(" base "," arg ")"))
+  ;; double
+  (mkexp (gpu-double-float-type 10)   (code "exp10(" arg ")"))
+  (mkexp (gpu-double-float-type 2)    (code "exp2(" arg ")"))
+  (mkexp (gpu-double-float-type null) (code "exp(" arg ")"))
+  (mkexp (gpu-double-float-type real) (code "exp(" arg "*" (log (float base 1.0d0)) ")"))
+  (mkexp (gpu-double-float-type t)    (code "pow(" base "," arg ")")))
 
 (def float-builtin exp (power)
   (emit-exp-c-code -stream- (form-c-type-of -form-) nil power))
@@ -709,10 +704,10 @@
   :forms application-form)
 
 (def function round-function-type (form)
-  (acase (or (combined-arg-type-of form)
+  (atypecase (or (combined-arg-type-of form)
             (form-c-type-of form))
-    ((:float :double) it)
-    (t :float)))
+    (gpu-native-float-type it)
+    (t +gpu-single-float-type+)))
 
 (def definer float-round-builtin (name c-name)
   `(def float-builtin ,name (arg &optional divisor)
@@ -732,12 +727,12 @@
 (def function int-round-builtin-type (form args upper-type)
   (let ((atype (ensure-arithmetic-result args form)))
     (setf (combined-arg-type-of form) atype)
-    (case atype
-      ((:int32 :uint32 :int64 :uint64) atype)
+    (typecase atype
+      (gpu-native-integer-type atype)
       (t
-       (case upper-type
-         ((:int32 :uint32 :int64 :uint64) upper-type)
-         (t :int32))))))
+       (typecase upper-type
+         (gpu-native-integer-type upper-type)
+         (t +gpu-int32-type+))))))
 
 (def macro with-divisor-vars ((arg divisor atype) &body code)
   `(bind ((div-value
@@ -800,8 +795,8 @@
           ((eql minv 0)
            (code "(" arg "%" divisor ")"))
           (t
-           (acase (form-c-type-of -form-)
-             ((:float :double)
+           (atypecase (form-c-type-of -form-)
+             (gpu-native-float-type
               (code "fmod" (float-name-tag it) "(" arg "," divisor ")"))
              (t
               (warn-gpu-style -form- "Using a floating-point implementation for integer remainder.")
@@ -833,9 +828,9 @@
   (when (null (rest args))
     (return-from emit-minmax-code
       (emit-c-code (first args) stream)))
-  (acase (form-c-type-of form)
-    (:double (emit-function-tree stream double-fun (treeify-list args)))
-    (:float (emit-function-tree stream float-fun (treeify-list args)))
+  (atypecase (form-c-type-of form)
+    (gpu-double-float-type (emit-function-tree stream double-fun (treeify-list args)))
+    (gpu-single-float-type (emit-function-tree stream float-fun (treeify-list args)))
     (t
      (princ "{" stream)
      (with-indented-c-code
@@ -857,8 +852,8 @@
      (princ "}" stream))))
 
 (def is-statement? min (&rest args)
-  (case (form-c-type-of -form-)
-    ((:float :double) nil)
+  (typecase (form-c-type-of -form-)
+    (gpu-native-float-type nil)
     (t (rest args))))
 
 (def type-computer min (&rest args)
@@ -870,8 +865,8 @@
   (emit-minmax-code -stream- -form- "<" "fminf" "fmin" args))
 
 (def is-statement? max (&rest args)
-  (case (form-c-type-of -form-)
-    ((:float :double) nil)
+  (typecase (form-c-type-of -form-)
+    (gpu-native-float-type nil)
     (t (rest args))))
 
 (def type-computer max (&rest args)

@@ -51,7 +51,7 @@
 
 (def layered-function prepare-for-compile (obj)
   (:method ((function gpu-function))
-    (propagate-c-types (form-of function) :upper-type :void))
+    (propagate-c-types (form-of function) :upper-type +gpu-void-type+))
   (:method ((function test-gpu-kernel))
     (assert (null (globals-of *cur-gpu-module*)))
     (bind ((body (form-of function))

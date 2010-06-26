@@ -145,7 +145,7 @@
                                (parent-of form)
                                :body (copy-list (values-of form)))
         (adjust-parents (body-of blk))
-        (setf (form-c-type-of blk) :void)
+        (setf (form-c-type-of blk) +gpu-void-type+)
         ;; Allocate new temporary vars
         (let ((aux-vars
                (loop for defn in side-effect-conflicts

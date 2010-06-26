@@ -246,7 +246,7 @@
                     include-size? included-dims
                     include-extent? included-strides) obj
     (if (null dimension-mask)
-        `(,(cuda-param-setter-name item-type) ,fhandle ,offset ,name)
+        (gen-cuda-param-setter-call item-type fhandle offset name)
         (let ((wofs (+ offset +cuda-ptr-size+ -4))
               (dynarr (null static-asize))
               (written? (if (member obj (side-effects-writes effects)) t)))

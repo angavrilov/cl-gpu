@@ -167,14 +167,14 @@
   (with-slots (c-name item-type dimension-mask static-asize
                       include-size? included-dims
                       include-extent? included-strides) obj
-    (let* ((base-type (if dimension-mask :pointer item-type))
+    (let* ((base-type (if dimension-mask (make-instance (default-pointer-type)) item-type))
            (size (c-type-size base-type)))
       (align-for-typef start-offset base-type)
       (when (and dimension-mask (null static-asize))
         (let* ((woffset (+ start-offset size)))
-          (align-for-typef woffset :uint32)
+          (align-for-typef woffset +gpu-uint32-type+)
           (incf woffset
-                (* (c-type-size :uint32)
+                (* (c-type-size +gpu-uint32-type+)
                    (+ (if include-size? 1 0)
                       (if include-extent? 1 0)
                       (loop for flag across included-dims count flag)
@@ -357,19 +357,19 @@
   (:method ((form constant-form) stream &key)
     (let ((value (value-of form))
           (type (form-c-type-of form)))
-      (ecase type
-        ((:void))
-        ((:int32)
+      (etypecase type
+        (gpu-values-type)
+        (gpu-int32-type
          (format stream "~A" value))
-        ((:double)
+        (gpu-double-float-type
          (format stream "~,,,,,,'EE" value))
-        ((:float)
+        (gpu-single-float-type
          (format stream "~,,,,,,'EEf" value))
-        ((:uint32)
+        (gpu-uint32-type
          (format stream "~AU" value))
-        ((:boolean)
+        (gpu-boolean-type
          (princ (if value "1" "0") stream))
-        ((:int8 :uint8 :int16 :uint16 :int64 :uint64)
+        (gpu-native-integer-type
          (format stream "((~A)~A)" (c-type-string type) value)))))
 
   ;; Assignment

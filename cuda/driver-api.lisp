@@ -797,13 +797,28 @@
   (gen :int16) (gen :uint16)
   (gen :double))
 
-(def function cuda-param-setter-name (type)
-  (macrolet ((gen (&rest types)
-               `(case type
-                  ,@(mapcar (lambda (type)
-                             `(,type ',(symbolicate 'cuda-param-set- type)))
-                           types))))
-    (gen :int8 :uint8 :int16 :uint16 :int32 :uint32 :float :double)))
+(defun cuda-param-set-any (type fhandle offset value)
+  (flet ((thunk (ptr offset size dir)
+           (assert (null dir))
+           (cuda-invoke cuParamSetv fhandle offset ptr size)))
+    (declare (dynamic-extent #'thunk))
+    (setf (native-type-ref type #'thunk offset) value)))
+
+(macrolet ((gen (&rest types)
+             `(def generic gen-cuda-param-setter-call (type fhandle offset value)
+                (:method (type fhandle offset value)
+                  `(cuda-param-set-any ,type ,fhandle ,offset ,value))
+                ,@(mapcar (lambda (type)
+                            `(:method ((type ,(if (consp type)
+                                                  (second type)
+                                                  (symbolicate '#:gpu- type '#:-type)))
+                                       fhandle offset value)
+                               (list ',(symbolicate 'cuda-param-set- (ensure-car type))
+                                     fhandle offset value)))
+                          types))))
+  (gen :int8 :uint8 :int16 :uint16 :int32 :uint32
+       (:float gpu-single-float-type)
+       (:double gpu-double-float-type)))
 
 (def function cuda-func-attr (fhandle attr)
   "Retrieve information about a CUDA kernel handle."
@@ -895,12 +910,11 @@
                                 (einfo (assoc eid (cuda-module-error-table module))))
                            (if einfo
                                (let ((arg-data (loop
-                                                  for j = 3 then (1+ j)
-                                                  for type in (second einfo)
+                                                  for j = 3 then (+ j (/ (align-offset (native-type-byte-size type) 4) 4))
+                                                  and type in (second einfo)
                                                   for offset = (* int-size (+ i j))
                                                   while (<= j size)
-                                                  collect (mem-ref ptr type offset)
-                                                  when (> (foreign-type-size type) 4) do (incf j))))
+                                                  collect (native-type-ref type ptr offset))))
                                  ;; Evaluate the error throw expression
                                  (eval `(let ((error-data ,(coerce arg-data 'vector)))
                                           ,(third einfo))))

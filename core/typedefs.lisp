@@ -100,6 +100,15 @@
 
 (def method lisp-type-of ((type gpu-no-type)) nil)
 
+(def class gpu-keyword-type (gpu-concrete-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "A keyword type."))
+
+(let () (defconstant +gpu-keyword-type+ (make-instance 'gpu-keyword-type)))
+
+(def method lisp-type-of ((type gpu-keyword-type)) 'keyword)
+
 ;; Numbers
 
 (def class gpu-number-type (gpu-concrete-type)
@@ -136,7 +145,7 @@
 
 ;; Native types
 
-(def class gpu-native-type ()
+(def class gpu-native-type (gpu-type)
   ()
   (:documentation "An abstract class denoting types that map to foreign ones."))
 
@@ -187,10 +196,10 @@
      ,(if not-number?
           `(def method make-foreign-gpu-type ((id (eql ,fid)) &key)
              (make-instance ',class))
-          `(def method make-foreign-gpu-type ((id (eql ,fid)) &key (min-value ,min-limit) (max-value ,max-limit))
+          `(def method make-foreign-gpu-type ((id (eql ,fid)) &key min-value max-value)
              (make-instance ',class
-                            :min-value ,(if min-limit `(max min-value ,min-limit) 'min-value)
-                            :max-value ,(if max-limit `(min max-value ,max-limit) 'max-value))))
+                            :min-value ,(if min-limit `(max (or min-value ,min-limit) ,min-limit) 'min-value)
+                            :max-value ,(if max-limit `(min (or max-value ,max-limit) ,max-limit) 'max-value))))
      (let () ; Make defconstant non-toplevel to avoid
              ; compile-time evaluation
        (defconstant ,(symbolicate "+" class "+") (make-foreign-gpu-type ,fid)))
@@ -225,7 +234,12 @@
 
 ;; Floating-point native types
 
-(def class gpu-single-float-type (gpu-float-type gpu-native-number-type)
+(def class gpu-native-float-type (gpu-float-type gpu-native-number-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "An abstract class denoting foreign float types."))
+
+(def class gpu-single-float-type (gpu-native-float-type)
   ()
   (:metaclass interned-class)
   (:documentation "A single-precision floating-point GPU value type."))
@@ -235,7 +249,7 @@
 (def method lisp-type-of ((type gpu-single-float-type))
   (lisp-real-type-name type 'single-float))
 
-(def class gpu-double-float-type (gpu-float-type gpu-native-number-type)
+(def class gpu-double-float-type (gpu-native-float-type)
   ()
   (:metaclass interned-class)
   (:documentation "A double-precision floating-point GPU value type."))
@@ -247,13 +261,18 @@
 
 ;; Integer native types
 
+(def class gpu-native-integer-type (gpu-integer-type gpu-native-number-type)
+  ()
+  (:metaclass interned-class)
+  (:documentation "An abstract class denoting foreign integer types."))
+
 (macrolet ((mkints (&rest items)
              (loop for (foreign-id c-name bytes signed?) in items
                 for class-name = (symbolicate '#:gpu- foreign-id '#:-type)
                 for magnitude = (ash 1 (- (* 8 bytes) (if signed? 1 0)))
                 for min-value = (if signed? (- magnitude) 0)
                 for max-value = (1- magnitude)
-                append `((def class ,class-name (gpu-integer-type gpu-native-number-type)
+                append `((def class ,class-name (gpu-native-integer-type)
                            ()
                            (:metaclass interned-class)
                            (:default-initargs :min-value ,min-value :max-value ,max-value)
@@ -269,9 +288,11 @@
                 collect `((and (>= min-value ,min-value) (<= max-value ,max-value))
                           (make-instance ',class-name :min-value min-value :max-value max-value))
                 into from-range
+                collect foreign-id into fids
                 finally
                   (return `(progn
                              ,@classes
+                             (def (constant :test 'equalp) +gpu-integer-foreign-ids+ ,(coerce fids 'vector))
                              (def function make-gpu-integer-from-lisp-type (type)
                                (cond ,@from-lisp
                                      (t (make-instance 'gpu-integer-type))))
@@ -317,6 +338,9 @@
 
 (def method lisp-type-of ((type gpu-values-type))
   (list* 'values (mapcar #'lisp-type-of (values-of type))))
+
+(def layered-method specific-type-p ((type gpu-values-type))
+  (every #'specific-type-p (values-of type)))
 
 (let ()
   (defconstant +gpu-void-type+ (make-instance 'gpu-values-type)))
@@ -483,6 +507,10 @@
 
 (def lisp-type-parser fixnum ()
   (make-instance 'gpu-int32-type))
+
+(def lisp-type-parser real (&optional min-value max-value)
+  (with-no-stars (min-value max-value)
+    (make-instance 'gpu-number-type :min-value min-value :max-value max-value)))
 
 (def lisp-type-parser integer (&optional min-value max-value)
   (with-no-stars (min-value max-value)

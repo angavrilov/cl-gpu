@@ -179,7 +179,10 @@
     (with-form-object (vcode 'verbatim-code-form -parent-
                              :is-expression? (not statement?))
       (setf (form-c-type-of vcode)
-            (parse-lisp-type ret-type :form vcode)
+            (ignore-errors
+              (if (keywordp ret-type)
+                  (make-foreign-gpu-type ret-type)
+                  (parse-lisp-type ret-type :form vcode)))
             (body-of vcode)
             (mapcar (lambda (form) (recurse form vcode)) code)))))
 
