@@ -78,6 +78,9 @@
 (def method buffer-foreign-type ((buffer abstract-foreign-buffer))
   (foreign-type-of (slot-value buffer 'elt-type)))
 
+(def method buffer-element-type ((buffer abstract-foreign-buffer))
+  (foreign-to-lisp-elt-type (slot-value buffer 'elt-type)))
+
 (def method buffer-rank ((buffer abstract-foreign-buffer))
   (length (slot-value buffer 'dims)))
 
@@ -200,11 +203,16 @@
          (size (reduce #'* dims))
          (elt-type (foreign-to-gpu-type foreign-type))
          (elt-size (native-type-byte-size elt-type))
-         (blk (alloc-foreign-block (foreign-type-of elt-type) size :initial-element initial-element))
+         (ftype (foreign-type-of elt-type))
+         (blk (if (and ftype initial-element)
+                  (alloc-foreign-block ftype size :initial-element initial-element)
+                  (alloc-foreign-block :uint8 (* size elt-size))))
          (buffer (make-instance 'foreign-array :blk blk :size size
                                 :elt-type elt-type :elt-size elt-size
                                 :dims (to-uint32-vector dims))))
-    (values buffer)))
+    (if (and initial-element (not ftype))
+        (buffer-fill buffer initial-element)
+        (values buffer))))
 
 (def method buffer-displace ((buffer foreign-array) &key
                              byte-offset foreign-type size dimensions

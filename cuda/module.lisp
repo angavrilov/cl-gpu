@@ -35,7 +35,7 @@
            (error "Cannot coerce to CUDA buffer without copy: ~A" object))
           (t
            (let ((buf (make-cuda-array (buffer-dimensions object)
-                                       :foreign-type (buffer-foreign-type object)
+                                       :foreign-type (buffer-gpu-type object)
                                        :debug nil)))
              (when (consp can-copy)
                (push buf (cdr can-copy))

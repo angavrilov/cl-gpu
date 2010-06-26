@@ -222,6 +222,22 @@
       (kernel :thread-cnt-x 4 :thread-cnt-y 4)
       (is (index-buffer? idxset)))))
 
+(def test test/cuda-driver/module-args-tuple ()
+  (with-fixture cuda-context
+    (with-test-gpu-module :cuda
+        ((:variable res (vector (tuple single-float 4) 2))
+         (:kernel kernel (data avs)
+           (declare (type (vector (tuple single-float 4) *) data)
+                    (type (array single-float 2) avs))
+           (setf (aref data 0) (tuple-raw-aref avs 1 4)
+                 (aref res 1) (tuple-raw-aref avs 0 4))))
+      (is (equalp (bref res 0) #(0.0 0.0 0.0 0.0)))
+      (is (equalp (bref res 1) #(0.0 0.0 0.0 0.0)))
+      (set-index-buffer *cuda-arr1*)
+      (kernel res *cuda-arr1*)
+      (is (equalp (bref res 1) #(0.0 1.0 2.0 3.0)))
+      (is (equalp (bref res 0) #(1.0 2.0 3.0 4.0))))))
+
 (def function cuda-allocate-dummy-block ()
   (make-cuda-array 10)
   (values nil nil nil nil nil))
