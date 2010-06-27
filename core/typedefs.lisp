@@ -127,11 +127,13 @@
   (:metaclass interned-class)
   (:documentation "A numeric GPU value type."))
 
-(def function lisp-real-type-name (type tag)
+(def function lisp-real-type-name (type tag &key (cv #'identity) (min-cv cv) (max-cv cv))
   (let ((min (min-value-of type))
         (max (max-value-of type)))
     (if (or min max)
-        (list tag (or min '*) (or max '*))
+        (list tag
+              (if min (funcall min-cv min) '*)
+              (if max (funcall max-cv max) '*))
         tag)))
 
 (def method lisp-type-of ((type gpu-number-type))
@@ -148,7 +150,7 @@
   (:documentation "An integer GPU value type."))
 
 (def method lisp-type-of ((type gpu-integer-type))
-  (lisp-real-type-name type 'integer))
+  (lisp-real-type-name type 'integer :min-cv #'ceiling :max-cv #'floor))
 
 (def class gpu-float-type (gpu-number-type)
   ()
@@ -156,7 +158,7 @@
   (:documentation "An floating-point GPU value type."))
 
 (def method lisp-type-of ((type gpu-float-type))
-  (lisp-real-type-name type 'float))
+  (lisp-real-type-name type 'float :cv #'float))
 
 ;; Native types
 
@@ -262,7 +264,7 @@
 (def-native-type-info gpu-single-float-type :float "float" 4 4)
 
 (def method lisp-type-of ((type gpu-single-float-type))
-  (lisp-real-type-name type 'single-float))
+  (lisp-real-type-name type 'single-float :cv (lambda (x) (float x 1.0))))
 
 (def class gpu-double-float-type (gpu-native-float-type)
   ()
@@ -272,7 +274,7 @@
 (def-native-type-info gpu-double-float-type :double "double" 8 8)
 
 (def method lisp-type-of ((type gpu-double-float-type))
-  (lisp-real-type-name type 'double-float))
+  (lisp-real-type-name type 'double-float :cv (lambda (x) (float x 1.0d0))))
 
 ;; Integer native types
 
