@@ -82,6 +82,16 @@
   (:metaclass interned-class)
   (:documentation "A specific GPU value type."))
 
+(def method print-object :around ((object gpu-concrete-type) stream)
+  ;; Don't print the GPU- prefix:
+  (format stream "#<~A" (subseq (symbol-name (class-name (class-of object))) 4))
+  (call-next-method)
+  (princ ">" stream))
+
+(def method print-object ((object gpu-concrete-type) stream)
+  (awhen (initarg-values-of object)
+    (format stream "~{ ~S~}" it)))
+
 (def class gpu-any-type (gpu-concrete-type)
   ()
   (:metaclass interned-class)
@@ -126,6 +136,11 @@
 
 (def method lisp-type-of ((type gpu-number-type))
   (lisp-real-type-name type 'real))
+
+(def method print-object ((object gpu-number-type) stream)
+  (with-slot-values (min-value max-value) object
+    (when (or min-value max-value)
+      (format stream " ~A..~A" (or min-value '*) (or max-value '*)))))
 
 (def class gpu-integer-type (gpu-number-type)
   ()
@@ -279,6 +294,12 @@
                            (:documentation "A native integer GPU value type."))
                          (def method initialize-instance :before ((self ,class-name) &key min-value max-value)
                            (assert (and (>= min-value ,min-value) (<= max-value ,max-value))))
+                         (def method print-object ((object ,class-name) stream)
+                           (with-slot-values (min-value max-value) object
+                             (let ((min (if (> min-value ,min-value) min-value))
+                                   (max (if (< max-value ,max-value) max-value)))
+                               (when (or min max)
+                                 (format stream " ~A..~A" (or min 'min) (or max 'max))))))
                          (def-native-type-info ,class-name ,foreign-id ,c-name ,bytes ,bytes
                                                :min-limit ,min-value :max-limit ,max-value))
                 into classes
@@ -336,6 +357,10 @@
   (:metaclass interned-class)
   (:documentation "A multiple-value return type."))
 
+(def method print-object ((object gpu-values-type) stream)
+  (awhen (values-of object)
+    (format stream "~{ ~S~}" it)))
+
 (def method lisp-type-of ((type gpu-values-type))
   (list* 'values (mapcar #'lisp-type-of (values-of type))))
 
@@ -353,6 +378,12 @@
    (dimensions :initform nil :initarg :dimensions :reader dimensions-of))
   (:metaclass interned-class)
   (:documentation "A value container/reference type."))
+
+(def method print-object ((object gpu-container-type) stream)
+  (with-slot-values (item-type dimensions) object
+    (when (or item-type dimensions)
+      (format stream " ~:[*~;~:*~S~]~@[ ~S~]"
+              item-type (mapcar #'nil->* dimensions)))))
 
 (def class gpu-array-type (gpu-container-type)
   ()
@@ -408,6 +439,11 @@
    (item-byte-size))
   (:metaclass interned-class)
   (:documentation "A tuple type."))
+
+(def method print-object ((object gpu-tuple-type) stream)
+  (with-slot-values (item-type size) object
+    (when (or item-type size)
+      (format stream " ~:[*~;~:*~S~]~@[ ~S~]" item-type size))))
 
 (def constructor gpu-tuple-type
   (with-slots (item-type item-lisp-type item-byte-size) -self-
