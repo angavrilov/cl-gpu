@@ -93,7 +93,7 @@
                                         builtin-args
                                         method-name-selector
                                         body-forms
-                                        &key method-args top-decls let-decls prefix)
+                                        &key method-args top-decls let-decls prefix with-type-arg?)
   "Non-hygienic helper for stuff like c-code-emitter.
 Defines variables: assn? rq-args opt-args rest-arg aux-args."
   `(let ((assn? nil))
@@ -107,7 +107,10 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
          (error "Keyword matching not supported"))
        `(def layered-method ,,method-name-selector
           ,@(layered-method-qualifiers -options-)
-          ((-name- (eql ',,builtin-name)) -form- ,@,method-args)
+          ((-name- (eql ',,builtin-name))
+           ,@,(if with-type-arg?
+                  ``((-ret-type- ,(getf -options- :ret-type 'gpu-type))))
+           -form- ,@,method-args)
           ,@,(if top-decls ``((declare ,@,top-decls)))
           (let* ((-arguments- (arguments-of -form-))
                  ,@(if assn?

@@ -265,15 +265,15 @@
 
 (def layered-function emit-c-code (form stream &key &allow-other-keys))
 
-(def layered-function emit-call-c-code (name form stream &key)
-  (:method (name form stream &key)
+(def layered-function emit-call-c-code (name type form stream &key)
+  (:method (name type form stream &key)
     (declare (ignore stream))
-    (gpu-code-error form "Unsupported function: ~S" name)))
+    (gpu-code-error form "Unsupported function: ~S with return type ~S" name type)))
 
-(def layered-function emit-assn-c-code (name form stream &key)
-  (:method (name form stream &key)
+(def layered-function emit-assn-c-code (name type form stream &key)
+  (:method (name type form stream &key)
     (declare (ignore stream))
-    (gpu-code-error form "Unsupported l-value function: ~S" name)))
+    (gpu-code-error form "Unsupported l-value function: ~S with return type ~S" name type)))
 
 (def macro with-c-code-emitter-lexicals ((stream) &body code)
   `(macrolet ((emit (format &rest args)
@@ -298,7 +298,8 @@
    ;; Body
    code
    :method-args `(-stream- &key)
-   :prefix `(with-c-code-emitter-lexicals (-stream-))))
+   :prefix `(with-c-code-emitter-lexicals (-stream-))
+   :with-type-arg? t))
 
 (def function emit-verbatim-item (item stream)
   (typecase item
@@ -331,10 +332,10 @@
 (def layered-methods emit-c-code
   ;; Delegate function calls
   (:method ((form free-application-form) stream &key)
-    (emit-call-c-code (operator-of form) form stream))
+    (emit-call-c-code (operator-of form) (form-c-type-of form) form stream))
 
   (:method ((form setf-application-form) stream &key)
-    (emit-assn-c-code (operator-of form) form stream))
+    (emit-assn-c-code (operator-of form) (form-c-type-of form) form stream))
 
   ;; Nice error message
   (:method ((form walked-form) stream &key)

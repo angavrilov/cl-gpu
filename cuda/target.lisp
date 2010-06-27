@@ -221,12 +221,11 @@
 
 ;; Fast arithmetics
 
-(def function cuda-optimize-fast-div? (&optional (type :float))
-  (and (eq type :float)
-       (is-optimize-level-any? :fast-div 1 :fast-math 1 'speed 3)))
+(def function cuda-optimize-fast-div? ()
+  (is-optimize-level-any? :fast-div 1 :fast-math 1 'speed 3))
 
-(def (c-code-emitter :in cuda-target) / (&rest args)
-  (if (cuda-optimize-fast-div? (form-c-type-of -form-))
+(def (c-code-emitter :in cuda-target :ret-type gpu-single-float-type) / (&rest args)
+  (if (cuda-optimize-fast-div?)
       (multiple-value-bind (arg1 rargs)
           (if (rest args)
               (values (first args) (rest args))
@@ -262,8 +261,8 @@
                     (with-c-code-emitter-lexicals (stream)
                       ,@code)
                     (call-next-method)))))
-  (def layered-method emit-log-c-code :in cuda-target (stream type base arg)
-    (if (cuda-optimize-fast-div? type)
+  (def layered-method emit-log-c-code :in cuda-target (stream (type gpu-single-float-type) base arg)
+    (if (cuda-optimize-fast-div?)
         (progn
           (write-string "__fdividef(" stream)
           (emit-log-c-code stream type nil arg)

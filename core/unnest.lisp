@@ -12,14 +12,14 @@
 
 ;;; Predicate that determines if a node is a statement
 
-(def layered-function is-statement-call? (name form)
-  (:method (name form)
-    (declare (ignore name form))
+(def layered-function is-statement-call? (name type form)
+  (:method (name type form)
+    (declare (ignore name type form))
     nil))
 
-(def layered-function is-statement-assn? (name form)
-  (:method (name form)
-    (declare (ignore name form))
+(def layered-function is-statement-assn? (name type form)
+  (:method (name type form)
+    (declare (ignore name type form))
     nil))
 
 (def definer is-statement? (name args &body code)
@@ -30,14 +30,15 @@
    (let ((all-args (flatten (list rq-args (mapcar #'first opt-args) rest-arg))))
      `((declare (ignorable ,@all-args))
        ,@code))
-   :let-decls (if assn? '((ignorable -value-)))))
+   :let-decls (if assn? '((ignorable -value-)))
+   :with-type-arg? t))
 
 (def layered-function is-statement? (form)
   ;; Built-in functions:
   (:method ((form free-application-form))
-    (is-statement-call? (operator-of form) form))
+    (is-statement-call? (operator-of form) (form-c-type-of form) form))
   (:method ((form setf-application-form))
-    (is-statement-assn? (operator-of form) form))
+    (is-statement-assn? (operator-of form) (form-c-type-of form) form))
   ;; Special forms:
   ;;  blocks
   (:method ((form implicit-progn-mixin)) t)

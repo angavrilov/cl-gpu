@@ -383,8 +383,7 @@
         (base (item-type-of tuple/type)))
     (wrap-values-type (loop for i from 0 below size collect base))))
 
-(def is-statement? untuple (tuple)
-  (typep (form-c-type-of -form-) 'gpu-values-type))
+(def (is-statement? :ret-type gpu-values-type) untuple (tuple) t)
 
 ;; code generators are target-specific
 
@@ -693,25 +692,24 @@
   (mkexp (gpu-double-float-type t)    (code "pow(" base "," arg ")")))
 
 (def float-builtin exp (power)
-  (emit-exp-c-code -stream- (form-c-type-of -form-) nil power))
+  (emit-exp-c-code -stream- -ret-type- nil power))
 
 (def float-builtin expt (base power)
-  (emit-exp-c-code -stream- (form-c-type-of -form-) (or (constant-number-value base) base) power))
+  (emit-exp-c-code -stream- -ret-type- (or (constant-number-value base) base) power))
 
 ;;; Rounding
 
 (def form-attribute-accessor combined-arg-type
   :forms application-form)
 
-(def function round-function-type (form)
-  (atypecase (or (combined-arg-type-of form)
-            (form-c-type-of form))
+(def function round-function-type (type)
+  (atypecase type
     (gpu-native-float-type it)
     (t +gpu-single-float-type+)))
 
 (def definer float-round-builtin (name c-name)
   `(def float-builtin ,name (arg &optional divisor)
-     (let ((type (round-function-type -form-)))
+     (let ((type (round-function-type -ret-type-)))
        (emit "~A~A(" ,c-name (float-name-tag type))
        (code arg)
        (when divisor
@@ -760,7 +758,7 @@
                 (when minv
                   (warn-gpu-style -form- "Using a floating-point implementation for integer rounding."))
                 (emit "(~A)" (c-type-string (form-c-type-of -form-)))
-                (emit-call-c-code ',fallback -form- -stream-)))))))
+                (emit-call-c-code ',fallback (combined-arg-type-of -form-) -form- -stream-)))))))
 
 (def int-round-builtin floor ffloor
   ((and minv power-2)
@@ -851,10 +849,8 @@
      (emit-code-newline stream)
      (princ "}" stream))))
 
-(def is-statement? min (&rest args)
-  (typecase (form-c-type-of -form-)
-    (gpu-native-float-type nil)
-    (t (rest args))))
+(def is-statement? min (&rest args) (rest args))
+(def (is-statement? :ret-type gpu-native-float-type) min (&rest args) nil)
 
 (def type-computer min (&rest args)
   (when (null args)
@@ -864,10 +860,8 @@
 (def c-code-emitter min (&rest args)
   (emit-minmax-code -stream- -form- "<" "fminf" "fmin" args))
 
-(def is-statement? max (&rest args)
-  (typecase (form-c-type-of -form-)
-    (gpu-native-float-type nil)
-    (t (rest args))))
+(def is-statement? max (&rest args) (rest args))
+(def (is-statement? :ret-type gpu-native-float-type) max (&rest args) nil)
 
 (def type-computer max (&rest args)
   (when (null args)
