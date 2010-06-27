@@ -172,7 +172,7 @@
 
 ;; Tuples
 
-(def (c-code-emitter :in cuda-target) tuple (&rest args)
+(def (c-code-emitter :in cuda-target :ret-type gpu-tuple-type) tuple (&rest args)
   (emit "make_~A" (c-type-string (form-c-type-of -form-)))
   (emit-separated -stream- args ","))
 
@@ -238,11 +238,9 @@
 (macrolet ((builtins (&rest names)
              `(progn
                 ,@(mapcar (lambda (name)
-                            `(def (c-code-emitter :in cuda-target) ,name (arg)
-                               (if (and (typep (form-c-type-of -form-) 'gpu-single-float-type)
-                                        (is-optimize-level-any?
-                                         ,(format-symbol :keyword "FAST-~A" name)
-                                         1 :fast-math 1 'speed 3))
+                            `(def (c-code-emitter :in cuda-target :ret-type gpu-single-float-type) ,name (arg)
+                               (if (is-optimize-level-any? ,(format-symbol :keyword "FAST-~A" name)
+                                                           1 :fast-math 1 'speed 3)
                                    (code ,(format nil "__~Af(" (string-downcase (symbol-name name)))
                                          arg ")")
                                    (call-next-method))))
@@ -306,10 +304,10 @@
 
 (def (is-statement? :in cuda-target) min (&rest args) nil)
 
-(def (c-code-emitter :in cuda-target) min (&rest args)
+(def (c-code-emitter :in cuda-target :ret-type gpu-number-type) min (&rest args)
   (emit-function-tree -stream- (cuda-minmax-function -form- "min") (treeify-list args)))
 
 (def (is-statement? :in cuda-target) max (&rest args) nil)
 
-(def (c-code-emitter :in cuda-target) max (&rest args)
+(def (c-code-emitter :in cuda-target :ret-type gpu-number-type) max (&rest args)
   (emit-function-tree -stream- (cuda-minmax-function -form- "max") (treeify-list args)))

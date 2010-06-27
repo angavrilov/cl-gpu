@@ -422,14 +422,15 @@
                       :promotion #'promote-type-to-arithmetic))
 
 (def definer delimited-builtin (name op &key zero single-pfix
-                                      (typechecker 'ensure-arithmetic-result))
+                                     (typechecker 'ensure-arithmetic-result)
+                                     (ret-type 'gpu-number-type))
   `(progn
      (def type-computer ,name (&rest args)
        (if args
            (,typechecker args -form-)
            (propagate-c-types (splice-constant-arg -form- ,zero)
                               :upper-type -upper-type-)))
-     (def c-code-emitter ,name (&rest args)
+     (def (c-code-emitter :ret-type ,ret-type) ,name (&rest args)
        (emit-separated -stream- args ,op :single-pfix ,single-pfix))))
 
 (def function ensure-div-result-type (args-or-types form)
@@ -442,14 +443,14 @@
 (def delimited-builtin * "*" :zero 1)
 (def delimited-builtin / "/" :zero 1.0
   :typechecker ensure-div-result-type
-  :single-pfix (if (typep (form-c-type-of -form-) 'gpu-double-float-type)
+  :single-pfix (if (typep -ret-type- 'gpu-double-float-type)
                    "1.0/" "1.0f/"))
 
 (def definer arithmetic-builtin (name args &body code)
   `(progn
      (def type-computer ,name ,args
        (ensure-arithmetic-result -arguments- -form-))
-     (def c-code-emitter ,name ,args
+     (def (c-code-emitter :ret-type gpu-number-type) ,name ,args
        ,@code)))
 
 (def arithmetic-builtin 1+ (arg)
@@ -478,21 +479,21 @@
 (def type-computer not (arg)
   (verify-cast arg +gpu-boolean-type+ -form-))
 
-(def c-code-emitter not (arg)
+(def (c-code-emitter :ret-type gpu-boolean-type) not (arg)
   (code "!" arg))
 
 (def type-computer zerop (arg)
   (ensure-arithmetic-result (list arg) -form-)
   +gpu-boolean-type+)
 
-(def c-code-emitter zerop (arg)
+(def (c-code-emitter :ret-type gpu-boolean-type) zerop (arg)
   (code "(" arg "==0)"))
 
 (def type-computer nonzerop (arg)
   (ensure-arithmetic-result (list arg) -form-)
   +gpu-boolean-type+)
 
-(def c-code-emitter nonzerop (arg)
+(def (c-code-emitter :ret-type gpu-boolean-type) nonzerop (arg)
   (code "(" arg "!=0)"))
 
 (def function expand-comparison-chain (form args mode)
@@ -520,7 +521,7 @@
                  (ensure-arithmetic-result -arguments- -form- :silent-signed? nil))
             `(ensure-arithmetic-result -arguments- -form- :silent-signed? nil))
        +gpu-boolean-type+)
-     (def c-code-emitter ,name (arg1 arg2)
+     (def (c-code-emitter :ret-type gpu-boolean-type) ,name (arg1 arg2)
        (code "(" arg1 ,operator arg2 ")"))))
 
 (def comparison-builtin > ">" :any-count? t)
@@ -538,7 +539,7 @@
     (verify-cast arg +gpu-boolean-type+ -form-))
   +gpu-boolean-type+)
 
-(def c-code-emitter and (&rest args)
+(def (c-code-emitter :ret-type gpu-boolean-type) and (&rest args)
   (if (null args)
       (emit "1")
       (emit-separated -stream- args "&&")))
@@ -548,7 +549,7 @@
     (verify-cast arg +gpu-boolean-type+ -form-))
   +gpu-boolean-type+)
 
-(def c-code-emitter or (&rest args)
+(def (c-code-emitter :ret-type gpu-boolean-type) or (&rest args)
   (if (null args)
       (emit "0")
       (emit-separated -stream- args "||")))
@@ -564,16 +565,19 @@
   `(progn
      (def type-computer ,name ,args
        (ensure-bitwise-result -arguments- -form-))
-     (def c-code-emitter ,name ,args
+     (def (c-code-emitter :ret-type gpu-native-integer-type) ,name ,args
        ,@code)))
 
 (def delimited-builtin logand "&" :zero -1
+  :ret-type gpu-native-integer-type
   :typechecker ensure-bitwise-result)
 
 (def delimited-builtin logior "|" :zero 0
+  :ret-type gpu-native-integer-type
   :typechecker ensure-bitwise-result)
 
 (def delimited-builtin logxor "^" :zero 0
+  :ret-type gpu-native-integer-type
   :typechecker ensure-bitwise-result)
 
 (def gpu-macro logeqv (&rest args)
@@ -613,7 +617,7 @@
   `(progn
      (def type-computer ,name ,args
        (ensure-float-result -arguments- -form-))
-     (def c-code-emitter ,name ,args
+     (def (c-code-emitter :ret-type gpu-native-float-type) ,name ,args
        ,@code)))
 
 ;; Miscellaneous
@@ -702,20 +706,14 @@
 (def form-attribute-accessor combined-arg-type
   :forms application-form)
 
-(def function round-function-type (type)
-  (atypecase type
-    (gpu-native-float-type it)
-    (t +gpu-single-float-type+)))
-
 (def definer float-round-builtin (name c-name)
   `(def float-builtin ,name (arg &optional divisor)
-     (let ((type (round-function-type -ret-type-)))
-       (emit "~A~A(" ,c-name (float-name-tag type))
-       (code arg)
-       (when divisor
-         (emit "/(~A)" (c-type-string type))
-         (code divisor))
-       (code ")"))))
+     (emit "~A~A(" ,c-name (float-name-tag -ret-type-))
+     (code arg)
+     (when divisor
+       (emit "/(~A)" (c-type-string -ret-type-))
+       (code divisor))
+     (code ")")))
 
 (def float-round-builtin ffloor "floor")
 (def float-round-builtin fceiling "ceil")
@@ -748,7 +746,7 @@
   `(progn
      (def type-computer ,name (arg &optional divisor)
        (int-round-builtin-type -form- -arguments- -upper-type-))
-     (def c-code-emitter ,name (arg &optional divisor)
+     (def (c-code-emitter :ret-type gpu-native-integer-type) ,name (arg &optional divisor)
        (with-divisor-vars (arg divisor (combined-arg-type-of -form-))
          (cond ((and minv (or (null divisor)
                               (eql div-value 1)))
@@ -758,7 +756,9 @@
                 (when minv
                   (warn-gpu-style -form- "Using a floating-point implementation for integer rounding."))
                 (emit "(~A)" (c-type-string (form-c-type-of -form-)))
-                (emit-call-c-code ',fallback (combined-arg-type-of -form-) -form- -stream-)))))))
+                (emit-call-c-code ',fallback
+                                  (promote-type-to-float (combined-arg-type-of -form-))
+                                  -form- -stream-)))))))
 
 (def int-round-builtin floor ffloor
   ((and minv power-2)
@@ -793,13 +793,12 @@
           ((eql minv 0)
            (code "(" arg "%" divisor ")"))
           (t
-           (atypecase (form-c-type-of -form-)
-             (gpu-native-float-type
-              (code "fmod" (float-name-tag it) "(" arg "," divisor ")"))
-             (t
-              (warn-gpu-style -form- "Using a floating-point implementation for integer remainder.")
-              (emit "(~A)" (c-type-string it))
-              (code "fmodf(" arg "," divisor ")")))))))
+           (warn-gpu-style -form- "Using a floating-point implementation for integer remainder.")
+           (emit "(~A)" (c-type-string -ret-type-))
+           (code "fmodf(" arg "," divisor ")")))))
+
+(def (c-code-emitter :ret-type gpu-native-float-type) rem (arg divisor)
+  (code "fmod" (float-name-tag -ret-type-) "(" arg "," divisor ")"))
 
 ;;; MIN & MAX
 
@@ -857,7 +856,7 @@
     (gpu-code-error -form- "Cannot use MIN without arguments."))
   (ensure-arithmetic-result args -form-))
 
-(def c-code-emitter min (&rest args)
+(def (c-code-emitter :ret-type gpu-number-type) min (&rest args)
   (emit-minmax-code -stream- -form- "<" "fminf" "fmin" args))
 
 (def is-statement? max (&rest args) (rest args))
@@ -868,5 +867,5 @@
     (gpu-code-error -form- "Cannot use MAX without arguments."))
   (ensure-arithmetic-result args -form-))
 
-(def c-code-emitter max (&rest args)
+(def (c-code-emitter :ret-type gpu-number-type) max (&rest args)
   (emit-minmax-code -stream- -form- ">" "fmaxf" "fmax" args))
