@@ -5,6 +5,18 @@
 
 cd `dirname $0`
 
+function link_system() {
+	DIR=$1
+
+	if [ ! -d 0links ]; then
+		mkdir 0links
+	fi
+
+	pushd 0links
+	ln -sf ../$DIR*/*.asd .
+	popd
+}
+
 function fetch_darcs() {
 	REPO=$1
 	DIR=`basename $REPO`
@@ -17,18 +29,18 @@ function fetch_darcs() {
 		darcs get --lazy "$REPO"
 	fi
 	
-	ln -sf $DIR/*.asd .
+	link_system $DIR
 }
 
 function fetch_wget() {
 	SYSTEM=$1
 	URL=$2
 
-	if [ ! -e $SYSTEM.asd ]; then
+	if [ ! -e 0links/$SYSTEM.asd ]; then
 		FILE=`basename $URL`
 		wget $URL
 		tar -xvzf $FILE
-		ln -sf $SYSTEM*/*.asd .
+		link_system $SYSTEM
 	fi
 }
 
@@ -43,10 +55,10 @@ function fetch_git() {
 		git clone "$REPO"
 	fi
 	
-	ln -sf $DIR/*.asd .
+	link_system $DIR
 }
 
-#wget -N http://common-lisp.net/project/asdf/asdf.lisp
+wget -N http://common-lisp.net/project/asdf/asdf.lisp
 
 # Better REPL interface for ecl
 fetch_wget ecl-readline http://www.common-lisp.net/project/ecl-readline/releases/ecl-readline-0.4.1.tar.gz
@@ -73,7 +85,7 @@ fetch_darcs http://common-lisp.net/project/closer/repos/closer-mop
 fetch_darcs http://common-lisp.net/project/closer/repos/contextl
 
 # Threads
-fetch_darcs http://common-lisp.net/project/bordeaux-threads/darcs/bordeaux-threads
+fetch_git git://common-lisp.net/projects/bordeaux-threads/bordeaux-threads.git
 
 # Walker
 fetch_darcs http://dwim.hu/darcs/hu.dwim.asdf
