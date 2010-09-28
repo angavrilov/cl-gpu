@@ -8,7 +8,7 @@
 ;;; a single instance for every initarg value set.
 ;;;
 
-(in-package :cl-gpu)
+(in-package :cl-gpu.buffers)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (def class interned-class (closer-mop:standard-class)

@@ -9,7 +9,7 @@
 ;;; The interface is immediately implemented for arrays.
 ;;;
 
-(in-package :cl-gpu)
+(in-package :cl-gpu.buffers)
 
 (def (generic e) bufferp (buffer)
   (:documentation "Determines if the argument is a buffer. Returns :foreign if based on foreign types.")
@@ -196,7 +196,7 @@
        do (setf (row-major-bref buffer i) value))
     buffer))
 
-(def (generic e) %copy-buffer-data (src dst src-offset dst-offset count)
+(def generic %copy-buffer-data (src dst src-offset dst-offset count)
   (:documentation "Copies a subset of elements from src to dst. Counts, offsets and types must be correct.")
   (:method ((src array) (dst array) src-offset dst-offset count)
     (copy-array-data src src-offset dst dst-offset count))

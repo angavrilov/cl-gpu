@@ -11,7 +11,7 @@
 (in-package :cl-gpu)
 
 (def function parse-global-type (type-spec &key form)
-  (atypecase (parse-lisp-type type-spec :form form)
+  (atypecase (parse-lisp-type type-spec :error-cb (curry #'gpu-code-error form))
     (gpu-array-type
      (unless (specific-type-p it)
        (gpu-code-error form "Insufficiently specific type spec: ~S" type-spec))
@@ -22,7 +22,7 @@
      it)))
 
 (def function parse-local-type (type-spec &key form)
-  (atypecase (parse-lisp-type type-spec :form form)
+  (atypecase (parse-lisp-type type-spec :error-cb (curry #'gpu-code-error form))
     (gpu-array-type
      (reintern-as-class it (default-pointer-type)))
     (t it)))
@@ -440,7 +440,8 @@
       (typecase item
         ((or string character))
         (t
-         (let* ((upper (aif (getf flags :type) (parse-lisp-type it :form form)))
+         (let* ((upper (aif (getf flags :type)
+                            (parse-lisp-type it :error-cb (curry #'gpu-code-error form))))
                 (rtype (propagate-c-types item :upper-type upper)))
            (when upper
              (verify-cast rtype upper form :prefix "inline argument"

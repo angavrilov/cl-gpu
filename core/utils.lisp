@@ -12,35 +12,6 @@
 
 ;;; Misc
 
-(defconstant +foreign-pointer-type-name+
-  #+ecl 'si:foreign-data
-  #+openmcl 'ccl:macptr)
-
-(declaim (inline ensure-cdr *->nil nil->*))
-
-(def function ensure-cdr (item)
-  (if (consp item) (cdr item)))
-
-(def function *->nil (x)
-  (if (eq x '*) nil x))
-
-(def function nil->* (x)
-  (or x '*))
-
-(def macro gethash-with-init (key table init-expr)
-  "Looks up the key in the table. When not found, lazily initializes with init-expr."
-  (with-unique-names (item found)
-    (once-only (key table)
-      `(multiple-value-bind (,item ,found) (gethash ,key ,table)
-         (if ,found ,item
-             (setf (gethash ,key ,table) ,init-expr))))))
-
-(def macro with-memoize ((key &rest flags) &body code)
-  "Memoizes the result of the code block using key; flags are passed to make-hash-table."
-  `(gethash-with-init ,key
-                      (load-time-value (make-hash-table ,@flags))
-                      (progn ,@code)))
-
 (def macro with-capturing-names ((namelist &key prefix) &body code)
   "Defines symbols in the list as symbols in the current package with the same names."
   `(let ,(mapcar (lambda (name)
@@ -66,26 +37,19 @@
 
 (define-modify-macro remove-form-by-name! (name &rest flags) remove-form-by-name)
 
-(def function extract-power-of-two (value)
-  "Returns the integer part of base-2 logarithm and the remainder."
-  (loop for i from 0
-     when (or (logtest value 1) (<= value 0))
-     return (values i value)
-     else do (setf value (ash value -1))))
-
 (def function make-type-arg (sym)
   (format-symbol t "~A/TYPE" sym))
 
 (def function eql-spec-if (predicate value)
   (if (funcall predicate value) `(eql ,value) value))
 
-(def macro with-slot-values (slots object &body code)
-  (once-only (object)
-    `(let ,(loop for spec in slots
-              for name = (ensure-car spec)
-              for slot = (if (consp spec) (second spec) `(quote ,name))
-              collect `(,name (slot-value ,object ,slot)))
-       ,@code)))
+(def function compute-strides (dims max-size)
+  (let ((strides (maplist (lambda (rdims)
+                            (reduce #'* rdims))
+                          dims)))
+    (when (> (first strides) max-size)
+      (error "Dimensions ~S exceed the block size ~A" dims max-size))
+    (values strides)))
 
 ;;; Builtin function handler definitions
 

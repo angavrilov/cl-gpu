@@ -87,7 +87,7 @@
   (and (subtypep t1 t2) (subtypep t2 t1)))
 
 (def test test/utils/types ()
-  (is (equal (cl-gpu::canonify-foreign-type :unsigned-short) :uint16))
+  (is (equal (cl-gpu.buffers::canonify-foreign-type :unsigned-short) :uint16))
   (is (equal (lisp-to-foreign-type '(unsigned-byte 10)) :int16))
   (is (equal (lisp-to-foreign-type '(unsigned-byte 16)) :uint16))
   (is (equal (lisp-to-foreign-type '(unsigned-byte 17)) :int32))

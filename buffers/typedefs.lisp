@@ -9,7 +9,7 @@
 ;;; of the code converter, and various conversions.
 ;;;
 
-(in-package :cl-gpu)
+(in-package :cl-gpu.buffers)
 
 ;;; GPU-specific type expanders
 
@@ -97,7 +97,7 @@
   (:metaclass interned-class)
   (:documentation "An unspecified type."))
 
-(let () (defconstant +gpu-any-type+ (make-instance 'gpu-any-type)))
+(let () (def constant +gpu-any-type+ (make-instance 'gpu-any-type)))
 
 (def method lisp-type-of ((type gpu-any-type)) t)
 
@@ -106,7 +106,7 @@
   (:metaclass interned-class)
   (:documentation "A nonexistant type."))
 
-(let () (defconstant +gpu-no-type+ (make-instance 'gpu-no-type)))
+(let () (def constant +gpu-no-type+ (make-instance 'gpu-no-type)))
 
 (def method lisp-type-of ((type gpu-no-type)) nil)
 
@@ -115,7 +115,7 @@
   (:metaclass interned-class)
   (:documentation "A keyword type."))
 
-(let () (defconstant +gpu-keyword-type+ (make-instance 'gpu-keyword-type)))
+(let () (def constant +gpu-keyword-type+ (make-instance 'gpu-keyword-type)))
 
 (def method lisp-type-of ((type gpu-keyword-type)) 'keyword)
 
@@ -219,7 +219,7 @@
                             :max-value ,(if max-limit `(min (or max-value ,max-limit) ,max-limit) 'max-value))))
      (let () ; Make defconstant non-toplevel to avoid
              ; compile-time evaluation
-       (defconstant ,(symbolicate "+" class "+") (make-foreign-gpu-type ,fid)))
+       (def constant ,(symbolicate "+" class "+") (make-foreign-gpu-type ,fid)))
      (def method foreign-type-of ((type ,class))
        ,fid)
      ,(when cstring
@@ -315,7 +315,7 @@
                 finally
                   (return `(progn
                              ,@classes
-                             (def (constant :test 'equalp) +gpu-integer-foreign-ids+ ,(coerce fids 'vector))
+                             (def (constant e :test 'equalp) +gpu-integer-foreign-ids+ ,(coerce fids 'vector))
                              (def function make-gpu-integer-from-lisp-type (type)
                                (cond ,@from-lisp
                                      (t (make-instance 'gpu-integer-type))))
@@ -370,7 +370,7 @@
   (every #'specific-type-p (values-of type)))
 
 (let ()
-  (defconstant +gpu-void-type+ (make-instance 'gpu-values-type)))
+  (def constant +gpu-void-type+ (make-instance 'gpu-values-type)))
 
 (def layered-method native-type-c-string ((type (eql (make-instance 'gpu-values-type))))
   "void")
@@ -489,9 +489,9 @@
 
 ;;; Lisp type parsing code
 
-(def generic do-parse-lisp-type (name type-spec &key form)
+(def generic do-parse-lisp-type (name type-spec &key error-cb)
   (:documentation "Parses the lisp type specifier")
-  (:method ((name t) type-spec &key form)
+  (:method ((name t) type-spec &key error-cb)
     (declare (ignore name))
     ;; Fallback code using subtypep provided by the implementation.
     (cond ((subtypep type-spec 'integer)
@@ -508,28 +508,30 @@
           ((subtypep type-spec 'boolean)
            (make-instance 'gpu-boolean-type))
           (t
-           (gpu-code-error form "Unsupported type spec: ~S" type-spec))))
-  (:method ((name gpu-type) type-spec &key form)
-    (declare (ignore form))
+           (funcall (or error-cb #'error) "Unsupported type spec: ~S" type-spec))))
+  (:method ((name gpu-type) type-spec &key error-cb)
+    (declare (ignore error-cb))
     (assert (eq name type-spec))
     name))
 
 (def definer lisp-type-parser (name args &body code)
-  `(defmethod do-parse-lisp-type ((-name- (eql ',name)) -whole- &key ((:form -form-)))
-     (declare (ignorable -name- -form-))
+  `(defmethod do-parse-lisp-type ((-name- (eql ',name)) -whole- &key ((:error-cb -error-cb-)))
+     (declare (ignorable -name- -error-cb-))
      (flet ((-recurse- (type)
               (if (eq type '*) nil
-                  (parse-lisp-type type :form -form-))))
+                  (parse-lisp-type type :error-cb -error-cb-)))
+            (-error- (&rest args)
+              (apply (or -error-cb- #'error) args)))
        (block ,name
          (destructuring-bind ,args (ensure-cdr -whole-)
            ,@code)))))
 
-(def function parse-lisp-type (type-spec &key form)
+(def function parse-lisp-type (type-spec &key error-cb)
   (multiple-value-bind (rspec expanded?)
       (expand-gpu-type (ensure-car type-spec) (ensure-cdr type-spec))
     (if expanded?
-        (parse-lisp-type rspec :form form)
-        (do-parse-lisp-type (ensure-car type-spec) type-spec :form form))))
+        (parse-lisp-type rspec :error-cb error-cb)
+        (do-parse-lisp-type (ensure-car type-spec) type-spec :error-cb error-cb))))
 
 (def macro with-no-stars (vars &body code)
   `(let ,(loop for var in vars collect `(,var (if (eq ,var '*) nil ,var)))
@@ -589,7 +591,7 @@
                     ((consp dims)
                      (mapcar #'*->nil dims))
                     (t
-                     (gpu-code-error -form- "Invalid array type spec: ~S" -whole-)))))
+                     (-error- "Invalid array type spec: ~S" -whole-)))))
     (make-instance 'gpu-array-type :item-type (-recurse- item-type) :dimensions dimv)))
 
 (def lisp-type-parser vector (&optional (item-type '*) dim)
@@ -600,7 +602,7 @@
 
 ;;; Type conversion functions
 
-(def function lisp-to-gpu-type (type)
+(def (function e) lisp-to-gpu-type (type)
   "Converts a foreign type to an equivalent gpu-type object. NIL if none."
   (with-memoize (type :test #'equal)
     (if (typep type 'gpu-type)
@@ -609,7 +611,7 @@
                (cvltype (lisp-type-of cvtype)))
           (if (subtypep cvltype type) cvtype nil)))))
 
-(def function foreign-to-gpu-type (type)
+(def (function e) foreign-to-gpu-type (type)
   "Converts a foreign type to a gpu-type object."
   (make-foreign-gpu-type (canonify-foreign-type type)))
 

@@ -8,7 +8,7 @@
 ;;; with arrays; some depend on the implementation.
 ;;;
 
-(in-package :cl-gpu)
+(in-package :cl-gpu.buffers)
 
 ;;; Array I/O
 
@@ -144,17 +144,6 @@
       array)))
 
 ;;; Array copying
-
-(def function compute-strides (dims max-size)
-  (let ((strides (maplist (lambda (rdims)
-                            (reduce #'* rdims))
-                          dims)))
-    (when (> (first strides) max-size)
-      (error "Dimensions ~S exceed the block size ~A" dims max-size))
-    (values strides)))
-
-(def function to-uint32-vector (list)
-  (make-array (length list) :element-type '(unsigned-byte 32) :initial-contents list))
 
 (def function %portable-copy-array-data (src-array src-ofs dest-array dest-ofs count)
   (declare (type fixnum src-ofs dest-ofs count)

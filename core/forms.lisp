@@ -182,7 +182,7 @@
             (ignore-errors
               (if (keywordp ret-type)
                   (make-foreign-gpu-type ret-type)
-                  (parse-lisp-type ret-type :form vcode)))
+                  (parse-lisp-type ret-type :error-cb (curry #'gpu-code-error vcode))))
             (body-of vcode)
             (mapcar (lambda (form) (recurse form vcode)) code)))))
 

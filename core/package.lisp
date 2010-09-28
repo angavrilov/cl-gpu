@@ -21,7 +21,10 @@
         :hu.dwim.defclass-star
         :hu.dwim.util
         :metabang-bind
-        :hu.dwim.walker)
+        :hu.dwim.walker
+        :cl-gpu.buffers
+        :cl-gpu.buffers/types
+        :cl-gpu.buffers/impl)
 
   (:import-from #:hu.dwim.walker
                 #:recurse #:recurse-on-body
@@ -32,8 +35,13 @@
                 #:unwalk-declarations
                 #:do-list-collect #:make-declaration)
 
-  (:export #:cuda-driver-error #:buffer
-           #:int8 #:int16 #:int32 #:int64
-           #:uint8 #:uint16 #:uint32 #:uint64
+  (:import-from #:cl-gpu.buffers
+                #:to-uint32-vector #:with-memoize #:gethash-with-init
+                #:with-slot-values)
+
+  (:export #:cuda-driver-error
            #:cuda-context #:cuda-context-device
            #:gpu-optimize :shared))
+
+(hu.dwim.common::export-external-symbols :cl-gpu.buffers :cl-gpu)
+

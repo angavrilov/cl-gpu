@@ -8,7 +8,7 @@
 ;;; a buffer based on foreign memory allocated via CFFI.
 ;;;
 
-(in-package :cl-gpu)
+(in-package :cl-gpu.buffers)
 
 ;;; Reference counting
 
@@ -235,21 +235,6 @@
     (setf (native-type-ref elt-type (foreign-block-handle blk)
                            (+ (* index elt-size) log-offset))
           value)))
-
-(defcfun "memcpy" :pointer
-  (dest :pointer)
-  (src :pointer)
-  (count :unsigned-int))
-
-(defcfun "memmove" :pointer
-  (dest :pointer)
-  (src :pointer)
-  (count :unsigned-int))
-
-(defcfun "memset" :pointer
-  (dest :pointer)
-  (byte :int)
-  (count :unsigned-int))
 
 (def macro with-foreign-array-ref (((ptr-var) buffer index) &body code)
   (with-unique-names (blk-var log-offset-var)

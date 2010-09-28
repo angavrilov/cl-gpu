@@ -18,17 +18,12 @@
   :depends-on (:cffi
                :bordeaux-threads
                :hu.dwim.walker
-               :trivial-garbage)
+               :cl-gpu.buffers)
   :components ((:module "core"
                 :components ((:file "package")
                              (:file "conditions" :depends-on ("package"))
                              (:file "utils" :depends-on ("conditions"))
-                             (:file "utils-interned-class" :depends-on ("utils"))
-                             (:file "typedefs" :depends-on ("utils-interned-class"))
-                             (:file "utils-array" :depends-on ("typedefs"))
-                             (:file "buffers" :depends-on ("typedefs" "utils-array"))
-                             (:file "foreign-buf" :depends-on ("buffers"))
-                             (:file "gpu-module" :depends-on ("buffers"))
+                             (:file "gpu-module" :depends-on ("utils"))
                              (:file "forms" :depends-on ("gpu-module"))
                              (:file "inline" :depends-on ("forms"))
                              (:file "type-inf" :depends-on ("gpu-module" "forms"))
