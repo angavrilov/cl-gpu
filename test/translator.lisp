@@ -181,8 +181,8 @@
     (multiple-value-call (lambda (a b) (test-int a b))
       (if nil (values 1 2) (values 3 4)))))
 
-(defparameter *test-int-1* 0)
 (declaim (type int32 *test-int-1*))
+(defparameter *test-int-1* 0)
 
 (def test test/translator/compute-7 (target)
   (handler-bind ((warning #'ignore-warning))
