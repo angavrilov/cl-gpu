@@ -228,6 +228,7 @@
   "Current active CUDA context")
 
 (defvar *cuda-context-lock* (make-lock "CUDA context"))
+(defvar *cuda-finalize-lock* (make-lock "CUDA context finalizer"))
 
 (defvar *cuda-context-list* nil
   "List of all allocated contexts")
@@ -335,10 +336,11 @@
         ;; Likewise defer reinitialization actions.
         (with-deferred-actions (*cuda-context-reallocate*)
           ;; Invalidate objects in the destroy queue.
-          (dolist (obj (cuda-context-destroy-queue context))
+          (dolist (obj (with-lock-held (*cuda-finalize-lock*)
+                         (prog1 (cuda-context-destroy-queue context)
+                           (setf (cuda-context-destroy-queue context) nil))))
             (with-simple-restart (continue "Continue rebuilding the context.")
               (invalidate obj)))
-          (setf (cuda-context-destroy-queue context) nil)
           ;; Save the contents of host blocks and queue reinitialization.
           (dolist (hbuf (weak-set-snapshot (cuda-context-host-blocks context)))
             (let* ((size (foreign-block-size hbuf))
@@ -366,11 +368,11 @@
 (def function cuda-context-queue-finalizer (context object queue-item)
   (assert queue-item)
   (finalize object
-            (lambda () (with-lock-held (*cuda-context-lock*)
+            (lambda () (with-lock-held (*cuda-finalize-lock*)
                     (push queue-item (cuda-context-destroy-queue context))))))
 
 (def function cuda-context-destroy-queued-items (context)
-  (loop for object = (with-lock-held (*cuda-context-lock*)
+  (loop for object = (with-lock-held (*cuda-finalize-lock*)
                        (pop (cuda-context-destroy-queue context)))
      while object do
        (with-simple-restart (continue "Continue destroying queued objects")
