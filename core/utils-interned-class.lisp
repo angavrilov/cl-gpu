@@ -10,14 +10,15 @@
 
 (in-package :cl-gpu)
 
-(def class interned-class (closer-mop:standard-class)
-  ((lookup-table :documentation "A table for interned instance lookup")
-   (lookup-arg-key-fun :documentation "Computes a lookup key from initargs")
-   (lookup-obj-key-fun :documentation "Computes a lookup key from an instance")
-   (obj-initargs-fun :documentation "Computes initargs from an instance")))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (def class interned-class (closer-mop:standard-class)
+    ((lookup-table :documentation "A table for interned instance lookup")
+     (lookup-arg-key-fun :documentation "Computes a lookup key from initargs")
+     (lookup-obj-key-fun :documentation "Computes a lookup key from an instance")
+     (obj-initargs-fun :documentation "Computes initargs from an instance")))
 
-(def method closer-mop:validate-superclass ((class interned-class) (superclass standard-class))
-  t)
+  (def method closer-mop:validate-superclass ((class interned-class) (superclass standard-class))
+    t))
 
 (def method closer-mop:finalize-inheritance :after ((class interned-class))
   (with-slots (lookup-table lookup-arg-key-fun lookup-obj-key-fun obj-initargs-fun) class
