@@ -71,7 +71,7 @@
 
 ;;; Device count
 
-(declaim (type simple-vector *cuda-devices*))
+(declaim (type (or null simple-vector) *cuda-devices*))
 
 (defvar *cuda-devices* nil)
 
@@ -227,7 +227,7 @@
 (defparameter *cuda-context* nil
   "Current active CUDA context")
 
-(defvar *cuda-context-lock* (make-lock "CUDA context"))
+(defvar *cuda-context-lock* (make-recursive-lock "CUDA context"))
 (defvar *cuda-finalize-lock* (make-lock "CUDA context finalizer"))
 
 (defvar *cuda-context-list* nil
@@ -265,7 +265,7 @@
     (mem-ref phandle 'cuda-context-handle)))
 
 (def (function e) cuda-create-context (device &optional flags)
-  (with-lock-held (*cuda-context-lock*)
+  (with-recursive-lock-held (*cuda-context-lock*)
     (let* ((flags (nconc (copy-list (ensure-list flags))
                          (if *cuda-debug* (list :map-host))))
            (thread (current-thread))
@@ -293,7 +293,7 @@
 (def (function e) cuda-destroy-context (context)
   (unless (cuda-context-handle context)
     (error "Context already destroyed."))
-  (with-lock-held (*cuda-context-lock*)
+  (with-recursive-lock-held (*cuda-context-lock*)
     ;; Verify correctness
     (with-cuda-context (context)
       (assert (eq (cuda-context-thread context) (current-thread)))
@@ -329,7 +329,7 @@
   (unless (cuda-context-handle context)
     (error "Context already destroyed."))
   (warn "Context reallocation resets non-debug device memory buffers to zero.")
-  (with-lock-held (*cuda-context-lock*)
+  (with-recursive-lock-held (*cuda-context-lock*)
     ;; Defer reference invalidation actions until the context is OK.
     (with-deferred-actions (*cuda-context-wipe*)
       (with-cuda-context (context)
@@ -379,12 +379,12 @@
          (deallocate object))))
 
 (def function cuda-context-add-cleanup (context item)
-  (with-lock-held (*cuda-context-lock*)
+  (with-recursive-lock-held (*cuda-context-lock*)
     (push item (cuda-context-cleanup-queue context))))
 
 (def function cuda-context-cleanup-queued-items (context)
   (unless *cuda-context-wipe*
-    (loop for object = (with-lock-held (*cuda-context-lock*)
+    (loop for object = (with-recursive-lock-held (*cuda-context-lock*)
                          (pop (cuda-context-cleanup-queue context)))
        while object do
        (with-simple-restart (continue "Continue calling cleanup handlers")
@@ -568,7 +568,7 @@
                                     (list 'mappings)))))
       (setf (cuda-host-blk-shadow-copy blk) (copy-cuda-host-blk blk))
       (cuda-context-queue-finalizer context blk (cuda-host-blk-shadow-copy blk))
-      (with-lock-held (*cuda-context-lock*)
+      (with-recursive-lock-held (*cuda-context-lock*)
         (weak-set-addf (cuda-context-host-blocks context) blk))
       blk)))
 
@@ -603,7 +603,7 @@
 (def method deallocate ((blk cuda-host-blk))
   (with-cuda-recover ("freeing a host block")
     (cuda-invoke cuMemFreeHost (cuda-host-blk-handle blk)))
-  (with-lock-held (*cuda-context-lock*)
+  (with-recursive-lock-held (*cuda-context-lock*)
     (weak-set-deletef (cuda-context-host-blocks (cuda-host-blk-context blk)) blk)))
 
 (def function %cuda-map-host-blk-handle (blk)
@@ -634,7 +634,7 @@
                (weak-mblk (copy-cuda-mapped-blk mblk)))
           (setf (cuda-linear-shadow-copy mblk) weak-mblk)
           (setf (cuda-mapped-blk-root weak-mblk) (cuda-host-blk-shadow-copy blk))
-          (with-lock-held (*cuda-context-lock*)
+          (with-recursive-lock-held (*cuda-context-lock*)
             (push mblk (cuda-host-blk-mappings blk))
             (push weak-mblk (cdr (cuda-host-blk-weak-mappings blk))))
           (values mblk)))))

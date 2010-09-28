@@ -197,10 +197,14 @@ Defines variables: assn? rq-args opt-args rest-arg aux-args."
          (when ,path
            (delete-if-exists ,path))))))
 
+#-(or ecl ccl)
+(defcfun "system" :int
+  (command :string))
+
 (defun system-command (cmd)
   #+ecl (ext:system cmd)
   #+ccl (ccl::os-command cmd)
-  #-(or ecl ccl) (error "Not implemented"))
+  #-(or ecl ccl) (system cmd))
 
 ;;; Weak sets
 

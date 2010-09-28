@@ -190,7 +190,7 @@
       (test-computations (target)
         (labels ((test1 (a) (+ (incf *test-int-1*) a)))
           (test-int (test1 3))
-          (let ((*test-int-1* (+ 8 *test-int-1*))
+          (let (#-sbcl (*test-int-1* (+ 8 *test-int-1*))
                 (*test-int-1* (+ 5 *test-int-1*)))
             (test-int (test1 5) (test1 6) *test-int-1*))
           (let* ((*test-int-1* (+ 8 *test-int-1*))

@@ -256,10 +256,11 @@
       (tg:gc :full t)
       (tg:gc :full t)
       #+openmcl (ccl::drain-termination-queue)
-      (is (= cnt (cuda-context-block-cnt *cuda-ctx*)))
-      (is (typep (car (cl-gpu::cuda-context-destroy-queue *cuda-ctx*))
-                 'cl-gpu::cuda-linear))
-      (with-deref-buffer (buf (make-cuda-array 10))
-        (declare (ignore buf))
-        (is (null (cl-gpu::cuda-context-destroy-queue *cuda-ctx*)))))))
+      (with-expected-failures
+        (is (= cnt (cuda-context-block-cnt *cuda-ctx*)))
+        (is (typep (car (cl-gpu::cuda-context-destroy-queue *cuda-ctx*))
+                   'cl-gpu::cuda-linear))
+        (with-deref-buffer (buf (make-cuda-array 10))
+          (declare (ignore buf))
+          (is (null (cl-gpu::cuda-context-destroy-queue *cuda-ctx*))))))))
 
