@@ -14,7 +14,8 @@
 
 (defconstant +foreign-pointer-type-name+
   #+ecl 'si:foreign-data
-  #+openmcl 'ccl:macptr)
+  #+openmcl 'ccl:macptr
+  #+sbcl 'sb-alien:system-area-pointer)
 
 ;;; Misc
 

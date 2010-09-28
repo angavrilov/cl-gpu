@@ -13,11 +13,12 @@
 
 ;;; GPU-specific type expanders
 
-(def generic expand-gpu-type (name args)
-  (:documentation "Expands type aliases defined through gpu-type.")
-  (:method ((name t) args)
-    (declare (ignore name args))
-    (values)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (def generic expand-gpu-type (name args)
+    (:documentation "Expands type aliases defined through gpu-type.")
+    (:method ((name t) args)
+      (declare (ignore name args))
+      (values))))
 
 (def (definer e :available-flags "e") gpu-type (name args &body code)
   ;; Does a deftype that is available to GPU code
@@ -522,6 +523,7 @@
                   (parse-lisp-type type :error-cb -error-cb-)))
             (-error- (&rest args)
               (apply (or -error-cb- #'error) args)))
+       (declare (ignorable #'-recurse- #'-error-))
        (block ,name
          (destructuring-bind ,args (ensure-cdr -whole-)
            ,@code)))))

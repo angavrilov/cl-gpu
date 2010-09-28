@@ -10,6 +10,31 @@
 
 (in-package :cl-gpu.buffers)
 
+;;; Array element size
+
+#+sbcl
+(sb-ext:defglobal %%size-shift-table%%
+    (let ((arr (make-array (1+ sb-vm:widetag-mask) :initial-element nil)))
+      (loop
+         for info across sb-vm:*specialized-array-element-type-properties*
+         for shift = (and (subtypep (sb-vm:saetp-specifier info) 'number)
+                          (case (sb-vm:saetp-n-bits info)
+                            (8 0) (16 1) (32 2) (64 3)))
+         when shift
+         do (setf (svref arr (sb-vm:saetp-typecode info)) shift))
+      arr)
+  "A table of element size shifts for supported array element types.")
+
+#+sbcl
+(defun vector-elt-shift-of (obj &optional silentp)
+  (declare (optimize (safety 0)))
+  (or (svref %%size-shift-table%%
+             (if (sb-vm::%other-pointer-p obj)
+                 (sb-kernel:%other-pointer-widetag obj)
+                 0))
+      (unless silentp
+        (error "Not an array, or element type not supported: ~A" obj))))
+
 ;;; Array I/O
 
 #+ccl
@@ -51,9 +76,19 @@
        (ccl:with-pointer-to-ivector (,ptr-var ,iv)
          (incf-pointer ,ptr-var ,bv)
          ,@code)))
+  #+sbcl
+  (with-unique-names (iv bv ev)
+    `(sb-kernel:with-array-data ((,iv ,arr) (,bv 0) (,ev))
+       (declare (ignore ,ev))
+       (sb-sys:with-pinned-objects (,iv)
+         (let ((,ptr-var (sb-sys:sap+ (sb-sys:vector-sap ,iv)
+                                      (ash ,bv (vector-elt-shift-of ,iv)))))
+           ,@code))))
   #+ecl
   `(let ((,ptr-var (make-pointer (%array-address ,arr))))
-     ,@code))
+     ,@code)
+  #-(or ecl ccl sbcl)
+  (error "Not implemented"))
 
 (def macro with-lisp-array-ref (((ptr-var) arr index elt-size) &body code)
   `(with-pointer-to-array (,ptr-var ,arr)
@@ -66,7 +101,11 @@
   #+ccl (multiple-value-bind (ivector base size)
             (array-ivector-range array)
           (ccl:stream-write-ivector stream ivector base size))
-  #-(or ecl ccl) (error "Not implemented"))
+  #+sbcl (sb-kernel:with-array-data ((vector array)
+                                     (start 0)
+                                     (end (array-total-size array)))
+           (vector-io:write-vector-data vector stream :start start :end end))
+  #-(or ecl ccl sbcl) (error "Not implemented"))
 
 (def (function e) read-array-bytes (array stream)
   "Restore the contents of the array from a binary stream."
@@ -74,7 +113,11 @@
   #+ccl (multiple-value-bind (ivector base size)
             (array-ivector-range array)
           (ccl:stream-read-ivector stream ivector base size))
-  #-(or ecl ccl) (error "Not implemented"))
+  #+sbcl (sb-kernel:with-array-data ((vector array)
+                                     (start 0)
+                                     (end (array-total-size array)))
+           (vector-io:read-vector-data vector stream :start start :end end))
+  #-(or ecl ccl sbcl) (error "Not implemented"))
 
 (def function array-type-tag (array)
   (ecase (lisp-to-foreign-elt-type
@@ -196,7 +239,30 @@
           (:object :int :object :int :int) :void
         "ecl_copy_subarray(#0,#1,#2,#3,#4)"
         :one-liner t :side-effects t))
-  #-(or ccl ecl)
+  #+sbcl
+  (sb-kernel:with-array-data ((src-vector src-array)
+                              (src-index src-ofs)
+                              (src-end (+ src-ofs count)))
+    (declare (ignore src-end))
+    (sb-kernel:with-array-data ((dest-vector dest-array)
+                                (dest-index dest-ofs)
+                                (dest-end (+ dest-ofs count)))
+      (declare (ignore dest-end))
+      (bind ((src-shift  (vector-elt-shift-of src-vector t))
+             (dest-shift (vector-elt-shift-of dest-vector t)))
+        (cond ((and src-shift dest-shift (= src-shift dest-shift))
+               (sb-sys:with-pinned-objects (src-vector dest-vector)
+                 (let ((src-ptr  (sb-sys:sap+ (sb-sys:vector-sap src-vector)
+                                              (ash src-index src-shift)))
+                       (dest-ptr (sb-sys:sap+ (sb-sys:vector-sap dest-vector)
+                                              (ash dest-index dest-shift)))
+                       (size (ash count src-shift)))
+                   (if (eq src-vector dest-vector)
+                       (memmove dest-ptr src-ptr size)
+                       (memcpy dest-ptr src-ptr size)))))
+              (t
+               (%portable-copy-array-data src-array src-ofs dest-array dest-ofs count))))))
+  #-(or ccl ecl sbcl)
   (%portable-copy-array-data src-array src-ofs dest-array dest-ofs count))
 
 (declaim (ftype (function (fixnum fixnum fixnum fixnum t) fixnum)

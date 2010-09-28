@@ -14,6 +14,7 @@
   :licence "LLGPL"
   :description "A helper library that provides a generalized buffer interface."
   :depends-on (:cffi
+               #+sbcl sb-vector-io
                :hu.dwim.util
                :hu.dwim.def+contextl
                :trivial-garbage)

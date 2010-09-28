@@ -70,6 +70,7 @@ fetch_darcs http://common-lisp.net/project/iterate/darcs/iterate
 fetch_darcs http://common-lisp.net/project/metabang-bind
 #fetch_darcs http://common-lisp.net/project/trivial-shell
 fetch_darcs http://common-lisp.net/~loliveira/darcs/trivial-garbage/
+fetch_git http://github.com/nikodemus/sb-vector-io.git
 
 # hu.dwim.util (formerly)
 #fetch_wget cl-fad http://weitz.de/files/cl-fad.tar.gz
