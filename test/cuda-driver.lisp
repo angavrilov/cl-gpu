@@ -63,22 +63,23 @@
 
 (def test test/cuda-driver/wrap-pitch ()
   (with-fixture cuda-context
-    (let ((blk (slot-value *cuda-arr1* 'cl-gpu::blk)))
+    (let* ((blk (slot-value *cuda-arr1* 'cl-gpu::blk))
+           (pitch (cl-gpu::cuda-linear-pitch blk)))
       (verify-wrap-pitch blk 0 (* 4 5)
                          '((:chunk 0 0 20)))
       (verify-wrap-pitch blk (* 4 5) 4
-                         '((:chunk 64 0 4)))
+                         `((:chunk ,pitch 0 4)))
       (verify-wrap-pitch blk (* 4 5) (* 4 6)
-                         '((:chunk 64 0 20)
-                           (:chunk 128 20 4)))
+                         `((:chunk ,pitch 0 20)
+                           (:chunk ,(* 2 pitch) 20 4)))
       (verify-wrap-pitch blk 0 (* 4 10)
-                         '((:rows 0 20 64 0 2)))
+                         `((:rows 0 20 ,pitch 0 2)))
       (verify-wrap-pitch blk (* 4 5) (* 4 10)
-                         '((:rows 0 20 64 1 2)))
+                         `((:rows 0 20 ,pitch 1 2)))
       (verify-wrap-pitch blk (* 4 4) (* 4 14)
-                         '((:chunk 16 0 4)
-                           (:rows 4 20 64 1 2)
-                           (:chunk 192 44 12))))))
+                         `((:chunk 16 0 4)
+                           (:rows 4 20 ,pitch 1 2)
+                           (:chunk ,(* 3 pitch) 44 12))))))
 
 (def test test/cuda-driver/cuda-linear-buffer ()
   (with-fixture cuda-context

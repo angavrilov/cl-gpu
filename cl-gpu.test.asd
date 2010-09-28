@@ -14,7 +14,6 @@
   :licence "LLGPL"
   :description "Test suite for cl-gpu"
   :depends-on (:hu.dwim.stefil+hu.dwim.def
-               :hu.dwim.stefil+swank
                :cl-gpu)
   :components ((:module "test"
                 :components ((:file "utils" :depends-on ("package"))
