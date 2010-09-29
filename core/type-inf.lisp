@@ -125,7 +125,7 @@
     (make-foreign-type-with-limits type1 type2 :double with-limits?))
   (:method ((type1 gpu-integer-type) (type2 gpu-integer-type) &key with-limits?)
     (if with-limits?
-        (range-union-call (type1 type2) (make-instance 'gpu-number-type))
+        (range-union-call (type1 type2) (make-instance 'gpu-integer-type))
         (make-instance 'gpu-integer-type)))
   (:method ((type1 gpu-native-integer-type) (type2 gpu-native-integer-type) &key with-limits?)
     (bind ((rtype (svref +gpu-integer-foreign-ids+
@@ -148,7 +148,7 @@
         (call-next-method))))
 
 (def layered-function promote-type-to-float (type)
-  (:documentation "Upgrades the type to one that may be a float function. E.g. forces ints to >=int32")
+  (:documentation "Upgrades the type to one that may be a float function. Forces everything but double to float.")
   (:method ((type gpu-type)) type)
   (:method ((type gpu-number-type))
     (reintern-as-class type 'gpu-single-float-type))
