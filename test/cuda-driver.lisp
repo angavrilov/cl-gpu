@@ -240,8 +240,21 @@
       (is (equalp (bref res 0) #(1.0 2.0 3.0 4.0))))))
 
 (def function cuda-allocate-dummy-block ()
-  (make-cuda-array 10)
-  (values nil nil nil nil nil))
+  (make-cuda-array 10))
+
+(def function eat-stack (depth callback)
+  "Call the callback function inside <depth> recursive
+calls, and cons memory before and after the callback."
+  (if (<= depth 0)
+      (let (foo)
+        (dotimes (i 100)
+          (push (make-array 40) foo))
+        (funcall callback)
+        (dotimes (i 100)
+          (push (make-array 40) foo))
+        (values (length foo) 0 0 0 0 0 0 0 0 0))
+      (values (1+ (eat-stack (1- depth) callback))
+              0 0 0 0 0 0 0 0 0)))
 
 (def function cuda-context-block-cnt (ctx)
   (length (cl-gpu::weak-set-snapshot (cl-gpu::cuda-context-blocks ctx))))
@@ -249,18 +262,19 @@
 (def test test/cuda-driver/gc/blocks ()
   (with-fixture cuda-context
     (let ((cnt (cuda-context-block-cnt *cuda-ctx*)))
-      (cuda-allocate-dummy-block)
+      (eat-stack 10 #'cuda-allocate-dummy-block)
       (is (= (1+ cnt) (cuda-context-block-cnt *cuda-ctx*)))
       (is (null (cl-gpu::cuda-context-destroy-queue *cuda-ctx*)))
-      (tg:gc :full t)
-      (tg:gc :full t)
-      (tg:gc :full t)
+      ;; Collect garbage:
+      #+sbcl (sb-sys:scrub-control-stack)
+      (dotimes (i 10)
+        (tg:gc :full t))
       #+openmcl (ccl::drain-termination-queue)
-      (with-expected-failures
-        (is (= cnt (cuda-context-block-cnt *cuda-ctx*)))
-        (is (typep (car (cl-gpu::cuda-context-destroy-queue *cuda-ctx*))
-                   'cl-gpu::cuda-linear))
-        (with-deref-buffer (buf (make-cuda-array 10))
-          (declare (ignore buf))
-          (is (null (cl-gpu::cuda-context-destroy-queue *cuda-ctx*))))))))
+      ;; Check that the objects were finalized:
+      (is (= cnt (cuda-context-block-cnt *cuda-ctx*)))
+      (is (typep (car (cl-gpu::cuda-context-destroy-queue *cuda-ctx*))
+                 'cl-gpu::cuda-linear))
+      (with-deref-buffer (buf (make-cuda-array 10))
+        (declare (ignore buf))
+        (is (null (cl-gpu::cuda-context-destroy-queue *cuda-ctx*)))))))
 
