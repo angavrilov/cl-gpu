@@ -290,7 +290,7 @@
                               (when (unknown-type? type)
                                 (gpu-code-error form "Unknown global variable type: ~S" name))
                               ;; Create the argument
-                              (let* ((new-id (make-symbol (string name)))
+                              (let* ((new-id (format-symbol nil "AUX/~A/CLOSURE" name))
                                      (arg (with-form-object (arg 'auxiliary-function-argument-form tree
                                                                  :name new-id)
                                             (setf (default-value-of arg)
