@@ -58,7 +58,7 @@
 
 (def class* abstract-foreign-buffer ()
   ((blk :type counted-block)
-   (displaced-to :type (or abstract-foreign-buffer null) :initform nil
+   (displaced-to #|:type (or abstract-foreign-buffer null)|# :initform nil
                  :documentation "Foreign array this one is displaced to")
    (log-offset :type fixnum :initform 0
                :documentation "Offset to the start of the block")
