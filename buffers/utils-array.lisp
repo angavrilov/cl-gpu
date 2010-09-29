@@ -19,21 +19,24 @@
          for info across sb-vm:*specialized-array-element-type-properties*
          for shift = (and (subtypep (sb-vm:saetp-specifier info) 'number)
                           (case (sb-vm:saetp-n-bits info)
-                            (8 0) (16 1) (32 2) (64 3)))
+                            (8 0) (16 1) (32 2) (64 3) (128 4)))
          when shift
          do (setf (svref arr (sb-vm:saetp-typecode info)) shift))
       arr)
   "A table of element size shifts for supported array element types.")
 
 #+sbcl
-(defun vector-elt-shift-of (obj &optional silentp)
+(declaim (inline vector-elt-shift-of)
+         (ftype (function (t) (integer 0 4)) vector-elt-shift-of))
+
+#+sbcl
+(defun vector-elt-shift-of (obj)
   (declare (optimize (safety 0)))
   (or (svref %%size-shift-table%%
              (if (sb-vm::%other-pointer-p obj)
                  (sb-kernel:%other-pointer-widetag obj)
                  0))
-      (unless silentp
-        (error "Not an array, or element type not supported: ~A" obj))))
+      (error "Not an array, or element type not supported: ~A" obj)))
 
 ;;; Array I/O
 
@@ -104,6 +107,7 @@
   #+sbcl (sb-kernel:with-array-data ((vector array)
                                      (start 0)
                                      (end (array-total-size array)))
+           (vector-elt-shift-of vector) ; assert it is safe
            (vector-io:write-vector-data vector stream :start start :end end))
   #-(or ecl ccl sbcl) (error "Not implemented"))
 
@@ -116,6 +120,7 @@
   #+sbcl (sb-kernel:with-array-data ((vector array)
                                      (start 0)
                                      (end (array-total-size array)))
+           (vector-elt-shift-of vector) ; assert it is safe
            (vector-io:read-vector-data vector stream :start start :end end))
   #-(or ecl ccl sbcl) (error "Not implemented"))
 
@@ -248,8 +253,8 @@
                                 (dest-index dest-ofs)
                                 (dest-end (+ dest-ofs count)))
       (declare (ignore dest-end))
-      (bind ((src-shift  (vector-elt-shift-of src-vector t))
-             (dest-shift (vector-elt-shift-of dest-vector t)))
+      (bind ((src-shift  (ignore-errors (vector-elt-shift-of src-vector)))
+             (dest-shift (ignore-errors (vector-elt-shift-of dest-vector))))
         (cond ((and src-shift dest-shift (= src-shift dest-shift))
                (sb-sys:with-pinned-objects (src-vector dest-vector)
                  (let ((src-ptr  (sb-sys:sap+ (sb-sys:vector-sap src-vector)
