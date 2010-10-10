@@ -58,17 +58,32 @@
 
 ;; Memory
 
-(defcfun "memcpy" :pointer
+#+ecl
+(ffi:defcbody memcpy (:pointer-void :pointer-void :unsigned-int) :object
+              "(memcpy(#0,#1,#2),Cnil)")
+
+#-ecl
+(defcfun "memcpy" :void
   (dest :pointer)
   (src :pointer)
   (count :unsigned-int))
 
-(defcfun "memmove" :pointer
+#+ecl
+(ffi:defcbody memmove (:pointer-void :pointer-void :unsigned-int) :object
+              "(memmove(#0,#1,#2),Cnil)")
+
+#-ecl
+(defcfun "memmove" :void
   (dest :pointer)
   (src :pointer)
   (count :unsigned-int))
 
-(defcfun "memset" :pointer
+#+ecl
+(ffi:defcbody memset (:pointer-void :int :unsigned-int) :object
+              "(memset(#0,#1,#2),Cnil)")
+
+#-ecl
+(defcfun "memset" :void
   (dest :pointer)
   (byte :int)
   (count :unsigned-int))

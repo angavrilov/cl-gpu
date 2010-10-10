@@ -18,6 +18,7 @@
       (loop
          for info across sb-vm:*specialized-array-element-type-properties*
          for shift = (and (subtypep (sb-vm:saetp-specifier info) 'number)
+                          (not (sb-vm:saetp-fixnum-p info))
                           (case (sb-vm:saetp-n-bits info)
                             (8 0) (16 1) (32 2) (64 3) (128 4)))
          when shift
@@ -62,14 +63,14 @@
       (values ivector base size))))
 
 #+ecl
-(defun %array-address (arr)
+(defun %array-pointer (arr)
   "Return the address of array's data."
   (check-type arr array)
-  (ffi:c-inline (arr) (object) :unsigned-long
+  (ffi:c-inline (arr) (:object) :object
     "switch (#0->array.elttype) {
        case aet_object: FEerror(\"Not a specialized array: ~S\", 1, #0); break;
        case aet_bit: FEerror(\"Cannot get a pointer to a bit array: ~S\", 1, #0); break;
-       default: @(return) = (unsigned long) #0->array.self.b8;
+       default: @(return) = ecl_make_pointer((#0)->array.self.b8);
      }"))
 
 (def macro with-pointer-to-array ((ptr-var arr) &body code)
@@ -88,7 +89,7 @@
                                       (ash ,bv (vector-elt-shift-of ,iv)))))
            ,@code))))
   #+ecl
-  `(let ((,ptr-var (make-pointer (%array-address ,arr))))
+  `(let ((,ptr-var (%array-pointer ,arr)))
      ,@code)
   #-(or ecl ccl sbcl)
   (error "Not implemented"))

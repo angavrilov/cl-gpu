@@ -9,11 +9,11 @@
 (in-package :hu.dwim.asdf)
 
 ;; Auto-detect CUDA
-#-cuda
+#-(or cuda (and ecl (not (and dffi dlopen))))
 (load-system :cffi)
 
-#-cuda
-(when (ignore-errors (cffi:load-foreign-library (:default "libcuda")) t)
+#-(or cuda (and ecl (not (and dffi dlopen))))
+(when (ignore-errors (cffi:load-foreign-library '(:default "libcuda")) t)
   (pushnew :cuda *features*))
 
 ;; System definition
