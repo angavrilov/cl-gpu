@@ -109,7 +109,7 @@
                                      (start 0)
                                      (end (array-total-size array)))
            (vector-elt-shift-of vector) ; assert it is safe
-           (vector-io:write-vector-data vector stream :start start :end end))
+           (sb-vector-io:write-vector-data vector stream :start start :end end))
   #-(or ecl ccl sbcl) (error "Not implemented"))
 
 (def (function e) read-array-bytes (array stream)
@@ -122,7 +122,7 @@
                                      (start 0)
                                      (end (array-total-size array)))
            (vector-elt-shift-of vector) ; assert it is safe
-           (vector-io:read-vector-data vector stream :start start :end end))
+           (sb-vector-io:read-vector-data vector stream :start start :end end))
   #-(or ecl ccl sbcl) (error "Not implemented"))
 
 (def function array-type-tag (array)
