@@ -265,7 +265,7 @@
 (def-native-type-info gpu-single-float-type :float "float" 4 4)
 
 (def method lisp-type-of ((type gpu-single-float-type))
-  (lisp-real-type-name type 'single-float :cv (lambda (x) (float x 1.0))))
+  (lisp-real-type-name type 'single-float :cv (lambda (x) (float x 1.0f0))))
 
 (def class gpu-double-float-type (gpu-native-float-type)
   ()

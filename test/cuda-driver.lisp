@@ -27,9 +27,9 @@
   (unwind-protect
        (progn
          (setf *cuda-arr1* (make-cuda-array '(5 5) :element-type 'single-float
-                                            :pitch-elt-size 4 :initial-element 0.0))
+                                            :pitch-elt-size 4 :initial-element 0.0f0))
          (setf *cuda-arr2* (make-cuda-array '(5 5) :element-type 'single-float
-                                            :pitch-elt-size 4 :initial-element 0.0))
+                                            :pitch-elt-size 4 :initial-element 0.0f0))
          (setf *cuda-arr3* (make-cuda-array '(5 5) :element-type 'single-float
                                             :pitch-elt-size 16 :initial-element 0))
          (setf *cuda-arr4* (make-cuda-array '(5 5) :element-type 'single-float
@@ -44,13 +44,13 @@
 
 (def fixture cuda-host-arrs
   (with-deref-buffers ((*cuda-host-arr1*
-                        (make-cuda-host-array '(5 5) :element-type 'single-float :initial-element 0.0))
+                        (make-cuda-host-array '(5 5) :element-type 'single-float :initial-element 0.0f0))
                        (*cuda-host-arr2*
-                        (make-cuda-host-array '(5 5) :element-type 'single-float :initial-element 0.0))
+                        (make-cuda-host-array '(5 5) :element-type 'single-float :initial-element 0.0f0))
                        (*cuda-host-arr3*
-                        (make-cuda-host-array 25 :element-type 'single-float :initial-element 0.0))
+                        (make-cuda-host-array 25 :element-type 'single-float :initial-element 0.0f0))
                        (*cuda-host-arr4*
-                        (make-cuda-host-array 25 :element-type 'single-float :initial-element 0.0)))
+                        (make-cuda-host-array 25 :element-type 'single-float :initial-element 0.0f0)))
     (-body-)))
 
 (def test verify-wrap-pitch (blk offset size commands)
@@ -117,12 +117,12 @@
                         (baz-val (cl-gpu::gpu-global-value baz-var)))
         (is (eq instance instance))
         ;; Initially zero
-        (is (eql foo-val 0.0))
+        (is (eql foo-val 0.0f0))
         (is (eql bar-val nil))
         (is (zero-buffer? baz-val))
         ;; Fill in static data
-        (setf foo-val 3.0)
-        (is (eql foo-val 3.0))
+        (setf foo-val 3.0f0)
+        (is (eql foo-val 3.0f0))
         (set-index-buffer baz-val)
         (is (index-buffer? baz-val))
         ;; Attach an array
@@ -139,7 +139,7 @@
           (reinitialize-instance module)
           (is (not (eql old-handle (cl-gpu::cuda-module-instance-handle instance)))))
         ;; Verify that the values are still there
-        (is (eql foo-val 3.0))
+        (is (eql foo-val 3.0f0))
         (is (index-buffer? bar-val))
         (is (index-buffer? baz-val))
         ;; Verify auto-wipe
@@ -149,7 +149,7 @@
         (is (zero-buffer? (cl-gpu::buffer-of bar-var)))))))
 
 (declaim (type single-float *test-global-val*))
-(defparameter *test-global-val* 0.7)
+(defparameter *test-global-val* 0.7f0)
 
 (def test test/cuda-driver/cuda-module-args ()
   (with-fixture cuda-context
@@ -182,11 +182,11 @@
              (result (cl-gpu::gpu-global-value (aref items 3)))
              (ptr (cl-gpu::cuda-linear-handle (slot-value baz 'cl-gpu::blk))))
         (is (zero-buffer? result))
-        (funcall kernel 0.5 baz :baz baz)
+        (funcall kernel 0.5f0 baz :baz baz)
         (is (every #'=
                    (buffer-as-array result)
                    (list ptr 48 6 48 24 4 ptr)))
-        (is (= (bref baz 1 1 1) 1.2))))))
+        (is (= (bref baz 1 1 1) 1.2f0))))))
 
 (def test test/cuda-driver/compute ()
   (with-fixture cuda-context
@@ -232,12 +232,12 @@
                     (type (array single-float 2) avs))
            (setf (aref data 0) (tuple-raw-aref avs 1 4)
                  (aref res 1) (tuple-raw-aref avs 0 4))))
-      (is (equalp (bref res 0) #(0.0 0.0 0.0 0.0)))
-      (is (equalp (bref res 1) #(0.0 0.0 0.0 0.0)))
+      (is (equalp (bref res 0) #(0.0f0 0.0f0 0.0f0 0.0f0)))
+      (is (equalp (bref res 1) #(0.0f0 0.0f0 0.0f0 0.0f0)))
       (set-index-buffer *cuda-arr1*)
       (kernel res *cuda-arr1*)
-      (is (equalp (bref res 1) #(0.0 1.0 2.0 3.0)))
-      (is (equalp (bref res 0) #(1.0 2.0 3.0 4.0))))))
+      (is (equalp (bref res 1) #(0.0f0 1.0f0 2.0f0 3.0f0)))
+      (is (equalp (bref res 0) #(1.0f0 2.0f0 3.0f0 4.0f0))))))
 
 (def function cuda-allocate-dummy-block ()
   (make-cuda-array 10))

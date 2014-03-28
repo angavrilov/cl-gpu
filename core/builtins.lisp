@@ -441,7 +441,7 @@
 (def delimited-builtin + "+" :zero 0)
 (def delimited-builtin - "-" :zero 0 :single-pfix "-")
 (def delimited-builtin * "*" :zero 1)
-(def delimited-builtin / "/" :zero 1.0
+(def delimited-builtin / "/" :zero 1.0f0
   :typechecker ensure-div-result-type
   :single-pfix (if (typep -ret-type- 'gpu-double-float-type)
                    "1.0/" "1.0f/"))
@@ -659,8 +659,8 @@
   (mklog (gpu-single-float-type 10)        (code "log10f(" arg ")"))
   (mklog (gpu-single-float-type 2)         (code "log2f(" arg ")"))
   (mklog (gpu-single-float-type null)      (code "logf(" arg ")"))
-  (mklog (gpu-single-float-type null real) (code (log (float arg 1.0))))
-  (mklog (gpu-single-float-type real real) (code (log (float arg 1.0) base)))
+  (mklog (gpu-single-float-type null real) (code (log (float arg 1.0f0))))
+  (mklog (gpu-single-float-type real real) (code (log (float arg 1.0f0) base)))
   ;; double
   (mklog (gpu-double-float-type 10)        (code "log10(" arg ")"))
   (mklog (gpu-double-float-type 2)         (code "log2(" arg ")"))
@@ -686,7 +686,7 @@
   (mkexp (gpu-single-float-type 10)   (code "exp10f(" arg ")"))
   (mkexp (gpu-single-float-type 2)    (code "exp2f(" arg ")"))
   (mkexp (gpu-single-float-type null) (code "expf(" arg ")"))
-  (mkexp (gpu-single-float-type real) (code "expf(" arg "*" (log (float base 1.0)) ")"))
+  (mkexp (gpu-single-float-type real) (code "expf(" arg "*" (log (float base 1.0f0)) ")"))
   (mkexp (gpu-single-float-type t)    (code "powf(" base "," arg ")"))
   ;; double
   (mkexp (gpu-double-float-type 10)   (code "exp10(" arg ")"))

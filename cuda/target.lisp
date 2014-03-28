@@ -229,7 +229,7 @@
       (multiple-value-bind (arg1 rargs)
           (if (rest args)
               (values (first args) (rest args))
-              (values 1.0 args))
+              (values 1.0f0 args))
         (code "__fdividef(" arg1 ",")
         (emit-separated -stream- rargs "*")
         (code ")"))
@@ -286,7 +286,7 @@
                     (call-next-method)))))
   (mkexp (gpu-single-float-type 10)    (code "__exp10f(" arg ")"))
   (mkexp (gpu-single-float-type null)  (code "__expf(" arg ")"))
-  (mkexp (gpu-single-float-type real)  (code "__expf(" arg "*" (log (float base 1.0)) ")"))
+  (mkexp (gpu-single-float-type real)  (code "__expf(" arg "*" (log (float base 1.0f0)) ")"))
   (mkexp (gpu-single-float-type t)     (code "__powf(" base "," arg ")")))
 
 ;; Min/max builtins
