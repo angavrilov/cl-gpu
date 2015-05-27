@@ -4,12 +4,9 @@
 ;;;
 ;;; See LICENCE for details.
 
-(load-system :hu.dwim.asdf)
-
-(in-package :hu.dwim.asdf)
-
 (defsystem :cl-gpu.cuda
-  :class hu.dwim.system
+  :defsystem-depends-on (:hu.dwim.asdf)
+  :class "hu.dwim.asdf:hu.dwim.system"
   :author ("Alexander Gavrilov <angavrilov@gmail.com>")
   :licence "LLGPL"
   :description "CUDA integration for the GPU code translator."
@@ -25,4 +22,3 @@
 
 (defmethod perform :after ((o load-op) (c (eql (find-system :cl-gpu.cuda))))
   (pushnew :cuda *features*))
-

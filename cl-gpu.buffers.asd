@@ -4,17 +4,14 @@
 ;;;
 ;;; See LICENCE for details.
 
-(load-system :hu.dwim.asdf)
-
-(in-package :hu.dwim.asdf)
-
 (defsystem :cl-gpu.buffers
-  :class hu.dwim.system
+  :defsystem-depends-on (:hu.dwim.asdf)
+  :class "hu.dwim.asdf:hu.dwim.system"
   :author ("Alexander Gavrilov <angavrilov@gmail.com>")
   :licence "LLGPL"
   :description "A helper library that provides a generalized buffer interface."
   :depends-on (:cffi
-               #+sbcl sb-vector-io
+               #+sbcl :sb-vector-io
                :hu.dwim.util
                :hu.dwim.def+contextl
                :trivial-garbage)
@@ -26,4 +23,3 @@
                              (:file "utils-array" :depends-on ("typedefs"))
                              (:file "buffers" :depends-on ("typedefs" "utils-array"))
                              (:file "foreign-buf" :depends-on ("buffers"))))))
-
