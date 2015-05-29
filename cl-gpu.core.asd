@@ -4,12 +4,9 @@
 ;;;
 ;;; See LICENCE for details.
 
-(load-system :hu.dwim.asdf)
-
-(in-package :hu.dwim.asdf)
-
 (defsystem :cl-gpu.core
-  :class hu.dwim.system
+  :defsystem-depends-on (:hu.dwim.asdf)
+  :class "hu.dwim.asdf:hu.dwim.system"
   :author ("Alexander Gavrilov <angavrilov@gmail.com>")
   :licence "LLGPL"
   :description "Core part of the GPU code translator."
@@ -31,4 +28,3 @@
                              (:file "builtins" :depends-on ("type-inf" "codegen" "unnest" "side-effects"))
                              (:file "syntax" :depends-on ("inline" "type-inf"))
                              (:file "test-function" :depends-on ("syntax"))))))
-

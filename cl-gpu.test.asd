@@ -4,12 +4,9 @@
 ;;;
 ;;; See LICENCE for details.
 
-(load-system :hu.dwim.asdf)
-
-(in-package :hu.dwim.asdf)
-
 (defsystem :cl-gpu.test
-  :class hu.dwim.test-system
+  :defsystem-depends-on (:hu.dwim.asdf)
+  :class "hu.dwim.asdf:hu.dwim.test-system"
   :author ("Alexander Gavrilov <angavrilov@gmail.com>")
   :licence "LLGPL"
   :description "Test suite for cl-gpu"
