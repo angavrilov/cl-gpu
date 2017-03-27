@@ -4,14 +4,14 @@
 ;;;
 ;;; See LICENCE for details.
 
-(defsystem :cl-gpu.test
-  :defsystem-depends-on (:hu.dwim.asdf)
+(defsystem "cl-gpu.test"
+  :defsystem-depends-on ("hu.dwim.asdf")
   :class "hu.dwim.asdf:hu.dwim.test-system"
   :author ("Alexander Gavrilov <angavrilov@gmail.com>")
   :licence "LLGPL"
   :description "Test suite for cl-gpu"
-  :depends-on (:hu.dwim.stefil+hu.dwim.def
-               :cl-gpu)
+  :depends-on ("hu.dwim.stefil+hu.dwim.def"
+               "cl-gpu")
   :components ((:module "test"
                 :components ((:file "utils" :depends-on ("package"))
                              (:file "buffers" :depends-on ("utils"))
