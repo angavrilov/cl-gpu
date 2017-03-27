@@ -37,25 +37,25 @@
   (is (equal (loop for i from 0 below 5
                 collect (bref buffer 1 i))
              (loop for i from 0 below 5 collect (float (+ i 5)))))
-  (buffer-fill buffer 0.5 :start 2 :end 23)
+  (buffer-fill buffer 0.5f0 :start 2 :end 23)
   (is (index-buffer? buffer :start 0 :end 2))
   (is (index-buffer? buffer :start 23))
-  (is (buffer-filled? buffer 0.5 :start 2 :end 23)))
+  (is (buffer-filled? buffer 0.5f0 :start 2 :end 23)))
 
 (def test test/buffers/copy-array-buffer (buffer)
   (let ((arr1 (make-array '(5 5) :element-type 'single-float))
-        (arr2 (make-array 25 :element-type 'single-float :initial-element 1.0)))
+        (arr2 (make-array 25 :element-type 'single-float :initial-element 1.0f0)))
     (buffer-fill buffer 0)
     (copy-full-buffer buffer arr2)
     (is (zero-buffer? arr2))
     (set-index-buffer arr1)
     (copy-full-buffer arr1 buffer)
     (is (index-buffer? buffer))
-    (buffer-fill arr2 0.5)
+    (buffer-fill arr2 0.5f0)
     (copy-buffer-data arr2 2 buffer 2 (- 23 2))
     (is (index-buffer? buffer :start 0 :end 2))
     (is (index-buffer? buffer :start 23))
-    (is (buffer-filled? buffer 0.5 :start 2 :end 23))))
+    (is (buffer-filled? buffer 0.5f0 :start 2 :end 23))))
 
 (def test test/buffers/copy-buffer-buffer (buffer1 buffer2 buffer3 buffer4)
   (buffer-fill buffer1 0)
@@ -82,35 +82,35 @@
 (def test test/buffers/displaced-buffer (buffer1 buffer2)
   (let* ((arr1 (buffer-displace buffer1 :offset 5 :dimensions '(2 5)))
          (arr2 (buffer-displace buffer2 :offset 5 :dimensions '(2 5)))
-         (tmp (make-array '(5 5) :element-type 'single-float :initial-element 0.0))
+         (tmp (make-array '(5 5) :element-type 'single-float :initial-element 0.0f0))
          (tmp1 (buffer-displace tmp :offset 5 :dimensions '(2 5))))
     (set-index-buffer buffer1)
     (is (index-buffer? arr1 :shift -5)) ; displaced read
-    (buffer-fill arr1 0.0)              ; displaced fill
+    (buffer-fill arr1 0.0f0)              ; displaced fill
     (is (index-buffer? buffer1 :start 0 :end 5))
-    (is (buffer-filled? buffer1 0.0 :start 5 :end 15))
+    (is (buffer-filled? buffer1 0.0f0 :start 5 :end 15))
     (is (index-buffer? buffer1 :start 15))
     (set-index-buffer arr1)             ; displaced write
     (is (index-buffer? buffer1 :start 5 :end 15 :shift 5))
     (set-index-buffer buffer2)
-    (buffer-fill buffer1 0.0)
+    (buffer-fill buffer1 0.0f0)
     (copy-full-buffer arr2 arr1)        ; displaced dev -> dev
-    (is (buffer-filled? buffer1 0.0 :start 0 :end 5))
+    (is (buffer-filled? buffer1 0.0f0 :start 0 :end 5))
     (is (index-buffer? buffer1 :start 5 :end 15))
-    (is (buffer-filled? buffer1 0.0 :start 15))
-    (buffer-fill arr1 0.0)
+    (is (buffer-filled? buffer1 0.0f0 :start 15))
+    (buffer-fill arr1 0.0f0)
     (is (zero-buffer? buffer1))
     (set-index-buffer tmp)
     (copy-full-buffer tmp1 arr1)        ; displaced host -> dev
-    (is (buffer-filled? buffer1 0.0 :start 0 :end 5))
+    (is (buffer-filled? buffer1 0.0f0 :start 0 :end 5))
     (is (index-buffer? buffer1 :start 5 :end 15))
-    (is (buffer-filled? buffer1 0.0 :start 15))
-    (buffer-fill tmp 0.0)
+    (is (buffer-filled? buffer1 0.0f0 :start 15))
+    (buffer-fill tmp 0.0f0)
     (is (zero-buffer? tmp))
     (copy-full-buffer arr1 tmp1)        ; displaced dev -> host
-    (is (buffer-filled? tmp 0.0 :start 0 :end 5))
+    (is (buffer-filled? tmp 0.0f0 :start 0 :end 5))
     (is (index-buffer? tmp :start 5 :end 15))
-    (is (buffer-filled? tmp 0.0 :start 15))))
+    (is (buffer-filled? tmp 0.0f0 :start 15))))
 
 (def test test/buffers/all (buffer1 buffer2 buffer3 buffer4)
   (test/buffers/basic-buffer buffer1)
@@ -129,13 +129,13 @@
 
 (def fixture foreign-arrs
   (with-deref-buffers ((*foreign-arr1*
-                        (make-foreign-array '(5 5) :element-type 'single-float :initial-element 0.0))
+                        (make-foreign-array '(5 5) :element-type 'single-float :initial-element 0.0f0))
                        (*foreign-arr2*
-                        (make-foreign-array '(5 5) :element-type 'single-float :initial-element 0.0))
+                        (make-foreign-array '(5 5) :element-type 'single-float :initial-element 0.0f0))
                        (*foreign-arr3*
-                        (make-foreign-array 25 :element-type 'single-float :initial-element 0.0))
+                        (make-foreign-array 25 :element-type 'single-float :initial-element 0.0f0))
                        (*foreign-arr4*
-                        (make-foreign-array 25 :element-type 'single-float :initial-element 0.0)))
+                        (make-foreign-array 25 :element-type 'single-float :initial-element 0.0f0)))
     (-body-)))
 
 (def test test/buffers/foreign ()
