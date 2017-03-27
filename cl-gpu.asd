@@ -6,18 +6,17 @@
 
 ;; Auto-detect CUDA
 #-(or cuda (and ecl (not (and dffi dlopen))))
-(load-system :cffi)
+(load-system "cffi")
 
 #-(or cuda (and ecl (not (and dffi dlopen))))
 (when (ignore-errors (cffi:load-foreign-library '(:default "libcuda")) t)
   (pushnew :cuda *features*))
 
-;; System definition
-(defsystem :cl-gpu
-  :defsystem-depends-on (:hu.dwim.asdf)
+(defsystem "cl-gpu"
+  :defsystem-depends-on ("hu.dwim.asdf")
   :class "hu.dwim.asdf:hu.dwim.system"
   :author ("Alexander Gavrilov <angavrilov@gmail.com>")
   :licence "LLGPL"
   :description "A library for writing GPU kernels in a subset of CL"
-  :depends-on (:cl-gpu.core
-               #+cuda :cl-gpu.cuda))
+  :depends-on ("cl-gpu.core"
+               #+cuda "cl-gpu.cuda"))

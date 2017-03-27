@@ -4,8 +4,8 @@
 ;;;
 ;;; See LICENCE for details.
 
-(defsystem :cl-gpu.core
-  :defsystem-depends-on (:hu.dwim.asdf)
+(defsystem "cl-gpu.core"
+  :defsystem-depends-on ("hu.dwim.asdf")
   :class "hu.dwim.asdf:hu.dwim.system"
   :author ("Alexander Gavrilov <angavrilov@gmail.com>")
   :licence "LLGPL"
